@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pinterest Pin Downloader</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Pinterest Pin Manager</h1>
+    </header>
+
+    <div class="controls">
+      <div class="fetch-section">
+        <h2>Fetch Pins</h2>
+        <input type="text" id="usernameInput" placeholder="Enter Pinterest username">
+        <div class="button-group">
+          <button id="fetchAllBtn" class="btn btn-primary">Fetch All Pins</button>
+          <button id="fetchByBoardBtn" class="btn btn-primary">Fetch by Boards</button>
+        </div>
+        <div id="fetchStatus" class="status-message"></div>
+      </div>
+
+      <div class="grouping-section">
+        <h2>View Options</h2>
+        <div class="radio-group">
+          <label>
+            <input type="radio" name="grouping" value="all" checked>
+            All Pins
+          </label>
+          <label>
+            <input type="radio" name="grouping" value="boards">
+            Group by Boards
+          </label>
+        </div>
+      </div>
+
+      <div class="save-section">
+        <h2>Storage</h2>
+        <div class="button-group">
+          <button id="manualSaveBtn" class="btn btn-secondary">Manual Save</button>
+          <button id="exportBtn" class="btn btn-secondary">Export JSON</button>
+          <button id="importBtn" class="btn btn-secondary">Import JSON</button>
+        </div>
+        <input type="file" id="importFile" accept=".json" style="display: none;">
+        <div class="autosave-indicator">
+          <span id="autosaveStatus">Autosave: Enabled</span>
+        </div>
+      </div>
+
+      <div class="download-section">
+        <h2>Download Controls</h2>
+        <div class="button-group">
+          <button id="downloadSelectedBtn" class="btn btn-success">Download Selected</button>
+          <button id="selectAllBtn" class="btn btn-secondary">Select All</button>
+          <button id="deselectAllBtn" class="btn btn-secondary">Deselect All</button>
+        </div>
+        <div class="download-stats">
+          <span>Total: <span id="totalPins">0</span></span>
+          <span>Selected: <span id="selectedPins">0</span></span>
+          <span>Downloaded: <span id="downloadedPins">0</span></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="pins-container">
+      <div id="searchBar">
+        <input type="text" id="searchInput" placeholder="Search pins...">
+      </div>
+      <div id="pinsList"></div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

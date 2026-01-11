@@ -1,0 +1,36 @@
+IMPORTANT: Icon Files Required
+================================
+
+Before loading this extension into Chrome, you must create three PNG icon files:
+- icon16.png (16x16 pixels)
+- icon48.png (48x48 pixels)
+- icon128.png (128x128 pixels)
+
+Place all three files in this 'icons' directory.
+
+Quick Options:
+--------------
+
+1. EASIEST: Online Converter
+   - Go to https://www.figma.com or https://www.canva.com
+   - Create a simple 128x128 image with Pinterest colors (#E60023)
+   - Export/download as PNG at 128x128, 48x48, and 16x16
+   - Rename to icon128.png, icon48.png, icon16.png
+
+2. QUICK: Use Any PNG Images
+   - Find any three PNG images on your computer
+   - Rename them to icon16.png, icon48.png, icon128.png
+   - Copy them to this folder
+   - (They don't need to be perfect for testing)
+
+3. AUTOMATED: Run the Python script
+   - Install: pip install pillow
+   - Run: python3 generate_icons.py
+   - Icons will be created automatically
+
+4. SVG CONVERSION: Use icon.svg
+   - Upload icon.svg to https://cloudconvert.com/svg-to-png
+   - Convert at sizes: 16x16, 48x48, 128x128
+   - Download and rename appropriately
+
+Until you have these files, Chrome will not load the extension.

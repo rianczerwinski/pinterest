@@ -1,0 +1,22 @@
+# Chrome extension specific
+*.pem
+*.crx
+
+# Development
+.DS_Store
+node_modules/
+*.log
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Backup files
+*.bak
+*.backup
+
+# Test data
+test-data/
