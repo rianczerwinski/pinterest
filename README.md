@@ -2,6 +2,8 @@
 
 A Chrome extension for managing and downloading Pinterest pins with local tracking and organization.
 
+validated? : no 🌿
+
 ## Features
 
 - **Fetch Pinterest Pins**: Automatically collect all pins from a Pinterest account
