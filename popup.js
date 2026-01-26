@@ -10,12 +10,182 @@ let currentGrouping = 'all';
 let autosaveEnabled = true;
 let autosaveTimeout = null;
 
+// Download settings with anti-bot protection
+let downloadSettings = {
+  minDelay: 2000,
+  maxDelay: 5000,
+  batchSize: 5,
+  batchDelay: 10000,
+  maxRetries: 3,
+  exponentialBackoff: true
+};
+
+// Download state
+let downloadState = {
+  isDownloading: false,
+  currentBatch: 0,
+  totalBatches: 0,
+  completed: 0,
+  failed: 0,
+  total: 0
+};
+
+// Pinterest tab management
+let selectedPinterestTab = null;
+
+async function findPinterestTabs() {
+  // Query ALL tabs with pinterest.com in URL
+  const tabs = await chrome.tabs.query({
+    url: ['https://*.pinterest.com/*', 'https://pinterest.com/*']
+  });
+  return tabs;
+}
+
+async function selectPinterestTab() {
+  const tabs = await findPinterestTabs();
+
+  if (tabs.length === 0) {
+    return {
+      success: false,
+      error: 'No Pinterest tabs found',
+      action: 'open_pinterest'
+    };
+  }
+
+  if (tabs.length === 1) {
+    // Automatically use the only Pinterest tab
+    selectedPinterestTab = tabs[0];
+    return {
+      success: true,
+      tab: tabs[0],
+      message: 'Pinterest tab detected'
+    };
+  }
+
+  // Multiple tabs - need user selection
+  return {
+    success: false,
+    error: 'Multiple Pinterest tabs found',
+    action: 'select_tab',
+    tabs: tabs
+  };
+}
+
+async function getActivePinterestTab() {
+  // If we have a selected tab and it's still valid, use it
+  if (selectedPinterestTab) {
+    try {
+      const tab = await chrome.tabs.get(selectedPinterestTab.id);
+      if (tab && tab.url.includes('pinterest.com')) {
+        return tab;
+      }
+    } catch (e) {
+      // Tab was closed, clear selection
+      selectedPinterestTab = null;
+    }
+  }
+
+  // Otherwise, run selection logic
+  const result = await selectPinterestTab();
+  if (result.success) {
+    return result.tab;
+  }
+
+  throw new Error(result.error);
+}
+
+function showPinterestTabSelector() {
+  findPinterestTabs().then(tabs => {
+    const selector = document.getElementById('tabSelector');
+    const openBtn = document.getElementById('openPinterestBtn');
+
+    if (tabs.length === 0) {
+      selector.style.display = 'none';
+      openBtn.style.display = 'block';
+      updateTabStatus('none', 'No Pinterest tabs found');
+      return;
+    }
+
+    if (tabs.length === 1) {
+      selectedPinterestTab = tabs[0];
+      selector.style.display = 'none';
+      openBtn.style.display = 'none';
+      updateTabStatus('connected', `Connected to: ${getTabTitle(tabs[0])}`);
+      return;
+    }
+
+    // Multiple tabs - show selector
+    selector.innerHTML = tabs.map(tab => `
+      <div class="tab-option" data-tab-id="${tab.id}">
+        <input type="radio" name="pinterest-tab" value="${tab.id}" id="tab-${tab.id}">
+        <label for="tab-${tab.id}">
+          <img src="${tab.favIconUrl || 'icons/icon16.png'}" width="16" height="16">
+          ${getTabTitle(tab)}
+        </label>
+      </div>
+    `).join('');
+    selector.style.display = 'block';
+    updateTabStatus('multiple', `${tabs.length} Pinterest tabs found - select one`);
+
+    // Add event listeners for radio buttons
+    selector.querySelectorAll('input[type="radio"]').forEach(radio => {
+      radio.addEventListener('change', (e) => {
+        const tabId = parseInt(e.target.value);
+        selectedPinterestTab = tabs.find(t => t.id === tabId);
+        updateTabStatus('connected', `Connected to: ${getTabTitle(selectedPinterestTab)}`);
+      });
+    });
+  });
+}
+
+function getTabTitle(tab) {
+  if (!tab.title || tab.title.trim() === '') {
+    return tab.url.substring(0, 50) + '...';
+  }
+  return tab.title.substring(0, 40) + (tab.title.length > 40 ? '...' : '');
+}
+
+function updateTabStatus(status, text) {
+  const indicator = document.getElementById('tabStatusIndicator');
+  const statusText = document.getElementById('tabStatusText');
+
+  statusText.textContent = text;
+
+  // Color coding
+  const colors = {
+    'connected': '#00a400',  // green
+    'none': '#e60023',       // red
+    'multiple': '#ffa500',   // orange
+    'checking': '#666'       // gray
+  };
+
+  indicator.style.color = colors[status] || colors['checking'];
+}
+
+function refreshPinterestTabs() {
+  updateTabStatus('checking', 'Checking for Pinterest tabs...');
+  showPinterestTabSelector();
+}
+
+function openPinterest() {
+  chrome.tabs.create({
+    url: 'https://www.pinterest.com',
+    active: false  // Don't switch to it
+  }, (newTab) => {
+    // Wait a bit for the page to load, then refresh
+    setTimeout(() => {
+      refreshPinterestTabs();
+    }, 2000);
+  });
+}
+
 // Initialize on load
 document.addEventListener('DOMContentLoaded', () => {
   loadState();
   initializeEventListeners();
   renderPins();
   updateStats();
+  refreshPinterestTabs(); // Check for Pinterest tabs on load
 });
 
 // Event listeners
@@ -45,6 +215,18 @@ function initializeEventListeners() {
   document.getElementById('selectAllBtn').addEventListener('click', selectAll);
   document.getElementById('deselectAllBtn').addEventListener('click', deselectAll);
 
+  // Settings inputs
+  document.getElementById('minDelay').addEventListener('change', updateSettings);
+  document.getElementById('maxDelay').addEventListener('change', updateSettings);
+  document.getElementById('batchSize').addEventListener('change', updateSettings);
+  document.getElementById('batchDelay').addEventListener('change', updateSettings);
+  document.getElementById('maxRetries').addEventListener('change', updateSettings);
+  document.getElementById('exponentialBackoff').addEventListener('change', updateSettings);
+
+  // Pinterest tab management
+  document.getElementById('refreshTabsBtn').addEventListener('click', refreshPinterestTabs);
+  document.getElementById('openPinterestBtn').addEventListener('click', openPinterest);
+
   // Search
   document.getElementById('searchInput').addEventListener('input', debounce(handleSearch, 300));
 }
@@ -61,11 +243,13 @@ async function fetchAllPins() {
   document.getElementById('fetchAllBtn').disabled = true;
 
   try {
-    // Send message to content script to fetch pins
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-
-    if (!tab.url.includes('pinterest.com')) {
-      showStatus('Please navigate to Pinterest.com first', 'error');
+    // Get Pinterest tab using new detection logic
+    let tab;
+    try {
+      tab = await getActivePinterestTab();
+    } catch (error) {
+      showStatus(error.message + '. Please open Pinterest in another tab.', 'error');
+      showPinterestTabSelector();
       document.getElementById('fetchAllBtn').disabled = false;
       return;
     }
@@ -107,10 +291,13 @@ async function fetchByBoards() {
   document.getElementById('fetchByBoardBtn').disabled = true;
 
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-
-    if (!tab.url.includes('pinterest.com')) {
-      showStatus('Please navigate to Pinterest.com first', 'error');
+    // Get Pinterest tab using new detection logic
+    let tab;
+    try {
+      tab = await getActivePinterestTab();
+    } catch (error) {
+      showStatus(error.message + '. Please open Pinterest in another tab.', 'error');
+      showPinterestTabSelector();
       document.getElementById('fetchByBoardBtn').disabled = false;
       return;
     }
@@ -312,7 +499,7 @@ function attachPinEventListeners() {
   });
 }
 
-// Download selected pins
+// Download selected pins with anti-bot protections
 async function downloadSelected() {
   const selectedPins = pinsData.pins.filter(p => p.selected && !p.downloaded);
 
@@ -321,17 +508,106 @@ async function downloadSelected() {
     return;
   }
 
-  showStatus(`Starting download of ${selectedPins.length} pins...`, 'info');
-
-  for (const pin of selectedPins) {
-    await downloadPin(pin);
-    // Small delay between downloads to avoid overwhelming the browser
-    await sleep(500);
+  if (downloadState.isDownloading) {
+    showStatus('Download already in progress', 'error');
+    return;
   }
 
-  showStatus(`Download complete! ${selectedPins.length} pins downloaded.`, 'success');
+  // Initialize download state
+  downloadState.isDownloading = true;
+  downloadState.completed = 0;
+  downloadState.failed = 0;
+  downloadState.total = selectedPins.length;
+  downloadState.totalBatches = Math.ceil(selectedPins.length / downloadSettings.batchSize);
+  downloadState.currentBatch = 0;
+
+  // Show progress UI
+  document.getElementById('downloadProgress').style.display = 'block';
+  document.getElementById('downloadSelectedBtn').disabled = true;
+
+  showStatus(`Starting download of ${selectedPins.length} pins in ${downloadState.totalBatches} batches...`, 'info');
+
+  // Process pins in batches
+  for (let i = 0; i < selectedPins.length; i += downloadSettings.batchSize) {
+    const batch = selectedPins.slice(i, i + downloadSettings.batchSize);
+    downloadState.currentBatch++;
+
+    updateDownloadProgress();
+
+    // Process each pin in the batch
+    for (const pin of batch) {
+      const success = await downloadPinWithRetry(pin);
+
+      if (success) {
+        downloadState.completed++;
+      } else {
+        downloadState.failed++;
+      }
+
+      updateDownloadProgress();
+
+      // Random delay between individual downloads within a batch
+      const delay = getRandomDelay(downloadSettings.minDelay, downloadSettings.maxDelay);
+      await sleep(delay);
+    }
+
+    // Longer delay between batches (if not the last batch)
+    if (i + downloadSettings.batchSize < selectedPins.length) {
+      showStatus(`Batch ${downloadState.currentBatch}/${downloadState.totalBatches} complete. Waiting before next batch...`, 'info');
+      await sleep(downloadSettings.batchDelay);
+    }
+  }
+
+  // Download complete
+  downloadState.isDownloading = false;
+  document.getElementById('downloadSelectedBtn').disabled = false;
+
+  const message = `Download complete! ${downloadState.completed} succeeded, ${downloadState.failed} failed.`;
+  showStatus(message, downloadState.failed > 0 ? 'warning' : 'success');
+
+  // Hide progress after a delay
+  setTimeout(() => {
+    document.getElementById('downloadProgress').style.display = 'none';
+  }, 5000);
+
   renderPins();
   updateStats();
+}
+
+// Download a single pin with retry logic and exponential backoff
+async function downloadPinWithRetry(pin, retryCount = 0) {
+  try {
+    const success = await downloadPin(pin);
+    if (success) {
+      return true;
+    }
+
+    // Retry logic
+    if (retryCount < downloadSettings.maxRetries) {
+      const backoffDelay = downloadSettings.exponentialBackoff
+        ? Math.min(downloadSettings.maxDelay * Math.pow(2, retryCount), 30000)
+        : downloadSettings.maxDelay;
+
+      console.log(`Retrying pin ${pin.id} (attempt ${retryCount + 1}/${downloadSettings.maxRetries}) after ${backoffDelay}ms`);
+      await sleep(backoffDelay);
+      return downloadPinWithRetry(pin, retryCount + 1);
+    }
+
+    return false;
+  } catch (error) {
+    console.error('Error downloading pin:', error);
+
+    if (retryCount < downloadSettings.maxRetries) {
+      const backoffDelay = downloadSettings.exponentialBackoff
+        ? Math.min(downloadSettings.maxDelay * Math.pow(2, retryCount), 30000)
+        : downloadSettings.maxDelay;
+
+      await sleep(backoffDelay);
+      return downloadPinWithRetry(pin, retryCount + 1);
+    }
+
+    return false;
+  }
 }
 
 // Download a single pin
@@ -350,8 +626,10 @@ async function downloadPin(pin) {
         pin.downloaded = true;
         pin.downloadPath = response.path;
         triggerAutosave();
+        resolve(true);
+      } else {
+        resolve(false);
       }
-      resolve();
     });
   });
 }
@@ -393,7 +671,7 @@ function handleSearch() {
 
 // Storage functions
 function loadState() {
-  chrome.storage.local.get(['pinsData'], (result) => {
+  chrome.storage.local.get(['pinsData', 'downloadSettings'], (result) => {
     if (result.pinsData) {
       pinsData = result.pinsData;
       if (pinsData.username) {
@@ -402,13 +680,44 @@ function loadState() {
       renderPins();
       updateStats();
     }
+    if (result.downloadSettings) {
+      downloadSettings = result.downloadSettings;
+      applySettings();
+    }
   });
 }
 
 function saveState() {
-  chrome.storage.local.set({ pinsData }, () => {
+  chrome.storage.local.set({ pinsData, downloadSettings }, () => {
     console.log('State saved');
   });
+}
+
+function applySettings() {
+  document.getElementById('minDelay').value = downloadSettings.minDelay;
+  document.getElementById('maxDelay').value = downloadSettings.maxDelay;
+  document.getElementById('batchSize').value = downloadSettings.batchSize;
+  document.getElementById('batchDelay').value = downloadSettings.batchDelay;
+  document.getElementById('maxRetries').value = downloadSettings.maxRetries;
+  document.getElementById('exponentialBackoff').checked = downloadSettings.exponentialBackoff;
+}
+
+function updateSettings() {
+  downloadSettings.minDelay = parseInt(document.getElementById('minDelay').value);
+  downloadSettings.maxDelay = parseInt(document.getElementById('maxDelay').value);
+  downloadSettings.batchSize = parseInt(document.getElementById('batchSize').value);
+  downloadSettings.batchDelay = parseInt(document.getElementById('batchDelay').value);
+  downloadSettings.maxRetries = parseInt(document.getElementById('maxRetries').value);
+  downloadSettings.exponentialBackoff = document.getElementById('exponentialBackoff').checked;
+
+  // Validate settings
+  if (downloadSettings.minDelay > downloadSettings.maxDelay) {
+    downloadSettings.maxDelay = downloadSettings.minDelay;
+    document.getElementById('maxDelay').value = downloadSettings.maxDelay;
+  }
+
+  saveState();
+  showStatus('Settings updated', 'success');
 }
 
 function triggerAutosave() {
@@ -511,6 +820,18 @@ function debounce(func, wait) {
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function getRandomDelay(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function updateDownloadProgress() {
+  const percent = downloadState.total > 0 ? (downloadState.completed + downloadState.failed) / downloadState.total * 100 : 0;
+
+  document.getElementById('progressText').textContent = `Batch ${downloadState.currentBatch}/${downloadState.totalBatches}`;
+  document.getElementById('progressCount').textContent = `${downloadState.completed + downloadState.failed}/${downloadState.total}`;
+  document.getElementById('progressFill').style.width = `${percent}%`;
 }
 
 // Listen for messages from background script

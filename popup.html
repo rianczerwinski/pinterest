@@ -16,6 +16,19 @@
       <div class="fetch-section">
         <h2>Fetch Pins</h2>
         <input type="text" id="usernameInput" placeholder="Enter Pinterest username">
+        <div class="pinterest-tab-section">
+          <div class="tab-status" id="pinterestTabStatus">
+            <span class="status-indicator" id="tabStatusIndicator">●</span>
+            <span id="tabStatusText">Checking for Pinterest tabs...</span>
+            <button id="refreshTabsBtn" class="btn-icon" title="Refresh tabs">🔄</button>
+          </div>
+          <div id="tabSelector" class="tab-selector" style="display: none;">
+            <!-- Dynamically populated with Pinterest tabs -->
+          </div>
+          <button id="openPinterestBtn" class="btn btn-link" style="display: none;">
+            Open Pinterest in New Tab
+          </button>
+        </div>
         <div class="button-group">
           <button id="fetchAllBtn" class="btn btn-primary">Fetch All Pins</button>
           <button id="fetchByBoardBtn" class="btn btn-primary">Fetch by Boards</button>
@@ -50,6 +63,41 @@
         </div>
       </div>
 
+      <div class="settings-section">
+        <h2>Download Settings</h2>
+        <details>
+          <summary>Anti-Bot Protection Settings</summary>
+          <div class="settings-grid">
+            <div class="setting-item">
+              <label for="minDelay">Min Delay (ms)</label>
+              <input type="number" id="minDelay" value="2000" min="500" max="30000" step="100">
+            </div>
+            <div class="setting-item">
+              <label for="maxDelay">Max Delay (ms)</label>
+              <input type="number" id="maxDelay" value="5000" min="1000" max="60000" step="100">
+            </div>
+            <div class="setting-item">
+              <label for="batchSize">Batch Size</label>
+              <input type="number" id="batchSize" value="5" min="1" max="50">
+            </div>
+            <div class="setting-item">
+              <label for="batchDelay">Batch Delay (ms)</label>
+              <input type="number" id="batchDelay" value="10000" min="5000" max="120000" step="1000">
+            </div>
+            <div class="setting-item">
+              <label for="maxRetries">Max Retries</label>
+              <input type="number" id="maxRetries" value="3" min="0" max="10">
+            </div>
+            <div class="setting-item">
+              <label>
+                <input type="checkbox" id="exponentialBackoff" checked>
+                Exponential Backoff
+              </label>
+            </div>
+          </div>
+        </details>
+      </div>
+
       <div class="download-section">
         <h2>Download Controls</h2>
         <div class="button-group">
@@ -61,6 +109,15 @@
           <span>Total: <span id="totalPins">0</span></span>
           <span>Selected: <span id="selectedPins">0</span></span>
           <span>Downloaded: <span id="downloadedPins">0</span></span>
+        </div>
+        <div id="downloadProgress" class="download-progress" style="display: none;">
+          <div class="progress-info">
+            <span id="progressText">Downloading...</span>
+            <span id="progressCount">0/0</span>
+          </div>
+          <div class="progress-bar">
+            <div id="progressFill" class="progress-fill"></div>
+          </div>
         </div>
       </div>
     </div>

@@ -1,5 +1,12 @@
 // Background service worker for handling downloads
 
+// Listen for extension icon clicks - open in new tab
+chrome.action.onClicked.addListener(() => {
+  chrome.tabs.create({
+    url: chrome.runtime.getURL('popup.html')
+  });
+});
+
 // Listen for download requests
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'downloadImage') {

@@ -4,15 +4,22 @@ A Chrome extension for managing and downloading Pinterest pins with local tracki
 
 validated? : no 🌿
 
+**Latest Update**: Added robust anti-bot protection with configurable settings, randomized delays, batch processing, exponential backoff retry logic, and duplicate download prevention.
+
 ## Features
 
 - **Fetch Pinterest Pins**: Automatically collect all pins from a Pinterest account
 - **Board Organization**: Group pins by boards or view all at once
 - **Local Storage**: Automatically saves your pin lists locally
 - **Download Management**: Download pins with progress tracking
-- **Download Status**: Track which pins have been downloaded
+- **Download Status**: Track which pins have been downloaded to avoid duplicates
 - **Search & Filter**: Easily search through your pin collections
 - **Export/Import**: Backup and restore your pin data
+- **Anti-Bot Protection**: Built-in safeguards to avoid detection and rate limiting
+  - Randomized delays between downloads
+  - Batch processing with configurable intervals
+  - Exponential backoff retry logic
+  - Configurable rate limiting controls
 
 ## Installation
 
@@ -63,11 +70,22 @@ You can use online tools like:
 
 ### 3. Downloading Pins
 
-1. Select the pins you want to download (or use "Select All")
-2. Click "Download Selected"
-3. Downloads will start automatically and save to your default downloads folder
-4. Downloaded pins are marked with a green background and "Downloaded" badge
-5. Progress is tracked and saved automatically
+1. **Configure Download Settings** (optional):
+   - Click "Anti-Bot Protection Settings" to expand the settings panel
+   - Adjust delays, batch sizes, and retry logic to your preferences
+   - Defaults are set to be safe for most use cases
+
+2. **Select and Download**:
+   - Select the pins you want to download (or use "Select All")
+   - Click "Download Selected"
+   - Downloads will process in batches with randomized delays
+   - Progress is shown in real-time with a progress bar
+   - Downloaded pins are marked with a green background and "Downloaded" badge
+
+3. **Duplicate Prevention**:
+   - Already downloaded pins are automatically excluded from new downloads
+   - Download status persists across browser sessions
+   - You can re-download individual pins if needed
 
 ### 4. Managing Data
 
@@ -75,6 +93,34 @@ You can use online tools like:
 - **Manual Save**: Click to force an immediate save
 - **Export JSON**: Download your pin data as a JSON file for backup
 - **Import JSON**: Restore from a previously exported file
+
+### 5. Anti-Bot Protection Settings
+
+The extension includes robust anti-bot protection to avoid triggering Pinterest's rate limiting or detection systems:
+
+**Configurable Settings:**
+
+- **Min Delay (2000ms default)**: Minimum wait time between individual downloads
+- **Max Delay (5000ms default)**: Maximum wait time between individual downloads
+- **Batch Size (5 default)**: Number of pins to download before taking a longer break
+- **Batch Delay (10000ms default)**: Extended wait time between batches
+- **Max Retries (3 default)**: Number of times to retry a failed download
+- **Exponential Backoff (enabled)**: Progressively increase delay on retry attempts
+
+**How It Works:**
+
+1. **Randomized Delays**: Each download waits a random time between Min and Max delay, making the pattern less predictable
+2. **Batch Processing**: Downloads are grouped into batches with longer breaks between batches to mimic human behavior
+3. **Smart Retry Logic**: Failed downloads are automatically retried with exponential backoff (1x, 2x, 4x delay)
+4. **Progress Tracking**: Real-time progress bar shows current batch and completion status
+
+**Recommended Settings:**
+
+- **Conservative** (safest): Min 3000ms, Max 8000ms, Batch Size 3, Batch Delay 15000ms
+- **Balanced** (default): Min 2000ms, Max 5000ms, Batch Size 5, Batch Delay 10000ms
+- **Aggressive** (faster, higher risk): Min 1000ms, Max 3000ms, Batch Size 10, Batch Delay 5000ms
+
+**Note**: More aggressive settings may trigger rate limiting. If you encounter issues, switch to more conservative settings.
 
 ## File Structure
 
@@ -128,11 +174,18 @@ Downloads/
    - You may need to scroll to load all pins before fetching
    - Very large pin collections may require multiple fetch attempts
 
-2. **Rate Limiting**: To avoid overwhelming your browser:
-   - Downloads happen sequentially with small delays
-   - Large collections may take time to download
+2. **Rate Limiting Protection**: To avoid triggering Pinterest's anti-bot systems:
+   - Downloads use randomized delays and batch processing
+   - Large collections will take time to download safely
+   - Default settings prioritize safety over speed
+   - Adjust settings carefully to balance speed vs. detection risk
 
 3. **Image Quality**: Downloads use the highest quality image available on the page
+
+4. **Browser-Based Scraping**: The extension relies on DOM scraping, which:
+   - May break if Pinterest changes their HTML structure
+   - Requires being logged in and on the Pinterest website
+   - Works best when pins are already loaded on the page
 
 ## Troubleshooting
 
@@ -171,13 +224,13 @@ To modify the extension:
 ## Future Enhancements
 
 Potential features to add:
-- Bulk download with pause/resume
-- Custom folder organization
+- Bulk download with pause/resume capability
+- Custom folder organization patterns
 - Filter by date, size, or other metadata
-- Duplicate detection
 - Integration with cloud storage
-- Download queue management
-- Statistics and analytics
+- Advanced statistics and analytics dashboard
+- Pinterest API integration (if available)
+- Automatic incremental fetching of new pins
 
 ## License
 
