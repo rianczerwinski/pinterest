@@ -17,36 +17,51 @@ async function fetchPinsFromPage(username, mode) {
   try {
     console.log('Fetching pins for:', username, 'Mode:', mode);
 
-    // Navigate to user's pins page if not already there
-    const currentUrl = window.location.href;
+    // Step 1: Ensure we're on the exact pins page
     const targetUrl = `https://www.pinterest.com/${username}/pins/`;
+    const currentUrl = window.location.href;
 
-    if (!currentUrl.includes(username)) {
+    // Normalize URLs for comparison (remove trailing slashes, query params, hash)
+    const normalizeUrl = (url) => url.split('?')[0].split('#')[0].replace(/\/$/, '');
+
+    if (normalizeUrl(currentUrl) !== normalizeUrl(targetUrl)) {
+      // Not on the pins page - navigate there
       window.location.href = targetUrl;
       return {
         success: false,
-        error: 'Navigating to user profile. Please click fetch again after the page loads.'
+        error: `Navigating to pins page. Please wait 3-4 seconds and click fetch again.`,
+        needsRetry: true
       };
     }
 
-    // Wait for pins to load
+    // Step 2: Wait for initial pins to load
     await waitForPins();
 
-    // Extract pins from the page
+    // Step 3: Scroll to load ALL pins dynamically
+    console.log('Starting auto-scroll to load all pins...');
+    const pinsBeforeScroll = document.querySelectorAll('[data-test-id="pin"], [data-test-id="pinWrapper"], .pinWrapper').length;
+    console.log(`Initial pins visible: ${pinsBeforeScroll}`);
+
+    // Call scrollAndLoadMore to load all pins
+    const totalPinsLoaded = await scrollAndLoadMore(50);
+    console.log(`After scrolling: ${totalPinsLoaded} pins loaded`);
+
+    // Step 4: Extract all pins from the DOM
     const pins = extractPinsFromDOM();
 
     if (mode === 'boards') {
-      // Also fetch board information
       const boards = await extractBoardsInfo(username);
       return {
         success: true,
         pins: pins,
-        boards: boards
+        boards: boards,
+        scrolledPins: totalPinsLoaded
       };
     } else {
       return {
         success: true,
-        pins: pins
+        pins: pins,
+        scrolledPins: totalPinsLoaded
       };
     }
   } catch (error) {
@@ -247,22 +262,93 @@ function extractBoardNameFromUrl(url) {
 }
 
 // Utility function to scroll and load more pins
-async function scrollAndLoadMore(maxScrolls = 10) {
+async function scrollAndLoadMore(maxScrolls = 50) {
   let scrollCount = 0;
-  let lastHeight = document.body.scrollHeight;
+  let lastPinCount = 0;
+  let sameCountIterations = 0;
+
+  console.log('Starting auto-scroll...');
 
   while (scrollCount < maxScrolls) {
+    // Scroll to bottom
     window.scrollTo(0, document.body.scrollHeight);
-    await new Promise(resolve => setTimeout(resolve, 2000));
 
-    const newHeight = document.body.scrollHeight;
-    if (newHeight === lastHeight) {
-      break; // No more content to load
+    // Wait for new content to load using MutationObserver
+    await waitForNewPins(1500);
+
+    // Count pins instead of just checking scroll height
+    const currentPinCount = document.querySelectorAll('[data-test-id="pin"], [data-test-id="pinWrapper"], .pinWrapper').length;
+
+    console.log(`Scroll ${scrollCount + 1}: ${currentPinCount} pins loaded`);
+
+    // Check if pin count has stopped increasing
+    if (currentPinCount === lastPinCount) {
+      sameCountIterations++;
+
+      // If no new pins for 3 consecutive scrolls, we've reached the end
+      if (sameCountIterations >= 3) {
+        console.log('No new pins loading - reached end');
+        break;
+      }
+    } else {
+      sameCountIterations = 0; // Reset counter if we found new pins
     }
 
-    lastHeight = newHeight;
+    lastPinCount = currentPinCount;
     scrollCount++;
   }
+
+  // Scroll back to top for better UX
+  window.scrollTo(0, 0);
+
+  console.log(`Auto-scroll complete. Total scrolls: ${scrollCount}, Total pins: ${lastPinCount}`);
+
+  return lastPinCount;
+}
+
+// Wait for new pins to load using MutationObserver
+function waitForNewPins(timeout) {
+  return new Promise((resolve) => {
+    let timer;
+    let observer;
+
+    const complete = () => {
+      clearTimeout(timer);
+      if (observer) observer.disconnect();
+      resolve();
+    };
+
+    // Set maximum wait time
+    timer = setTimeout(complete, timeout);
+
+    // Watch for new pin elements being added to DOM
+    observer = new MutationObserver((mutations) => {
+      const hasNewPins = mutations.some(m =>
+        Array.from(m.addedNodes).some(node =>
+          node.nodeType === 1 && (
+            node.matches?.('[data-test-id="pin"]') ||
+            node.matches?.('[data-test-id="pinWrapper"]') ||
+            node.matches?.('.pinWrapper') ||
+            node.querySelector?.('[data-test-id="pin"]') ||
+            node.querySelector?.('[data-test-id="pinWrapper"]') ||
+            node.querySelector?.('.pinWrapper')
+          )
+        )
+      );
+
+      if (hasNewPins) {
+        // Reset timer when new pins detected
+        clearTimeout(timer);
+        timer = setTimeout(complete, 500); // Wait 500ms after last pin loads
+      }
+    });
+
+    // Observe the main container where pins are added
+    const container = document.querySelector('[data-test-id="user-pins-container"]') ||
+                      document.querySelector('[role="main"]') ||
+                      document.body;
+    observer.observe(container, { childList: true, subtree: true });
+  });
 }
 
 // Auto-fetch pins when extension is active (optional feature)

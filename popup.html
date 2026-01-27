@@ -13,60 +13,53 @@
     </header>
 
     <div class="controls">
-      <div class="fetch-section">
-        <h2>Fetch Pins</h2>
-        <input type="text" id="usernameInput" placeholder="Enter Pinterest username">
-        <div class="pinterest-tab-section">
-          <div class="tab-status" id="pinterestTabStatus">
-            <span class="status-indicator" id="tabStatusIndicator">●</span>
-            <span id="tabStatusText">Checking for Pinterest tabs...</span>
-            <button id="refreshTabsBtn" class="btn-icon" title="Refresh tabs">🔄</button>
-          </div>
-          <div id="tabSelector" class="tab-selector" style="display: none;">
-            <!-- Dynamically populated with Pinterest tabs -->
-          </div>
-          <button id="openPinterestBtn" class="btn btn-link" style="display: none;">
-            Open Pinterest in New Tab
-          </button>
-        </div>
-        <div class="button-group">
-          <button id="fetchAllBtn" class="btn btn-primary">Fetch All Pins</button>
-          <button id="fetchByBoardBtn" class="btn btn-primary">Fetch by Boards</button>
-        </div>
-        <div id="fetchStatus" class="status-message"></div>
-      </div>
-
-      <div class="grouping-section">
-        <h2>View Options</h2>
-        <div class="radio-group">
-          <label>
+      <div class="fetch-grid">
+        <div class="fetch-col-1">
+          <input type="text" id="usernameInput" placeholder="Username">
+          <button id="fetchAllBtn" class="btn btn-primary">Fetch All</button>
+          <label class="radio-label">
             <input type="radio" name="grouping" value="all" checked>
             All Pins
           </label>
-          <label>
+        </div>
+        <div class="fetch-col-2">
+          <input type="text" id="searchInput" placeholder="Search pins...">
+          <button id="fetchByBoardBtn" class="btn btn-primary">By Boards</button>
+          <label class="radio-label">
             <input type="radio" name="grouping" value="boards">
-            Group by Boards
+            By Boards
           </label>
         </div>
+        <div class="fetch-col-3">
+          <div class="pinterest-tab-section">
+            <div class="tab-status" id="pinterestTabStatus">
+              <span class="status-indicator" id="tabStatusIndicator">●</span>
+              <span id="tabStatusText">Checking...</span>
+              <button id="refreshTabsBtn" class="btn-icon" title="Refresh">🔄</button>
+            </div>
+            <div id="tabSelector" class="tab-selector" style="display: none;">
+              <!-- Dynamically populated with Pinterest tabs -->
+            </div>
+            <button id="openPinterestBtn" class="btn btn-link" style="display: none;">
+              Open Pinterest
+            </button>
+          </div>
+        </div>
       </div>
+      <div id="fetchStatus" class="status-message"></div>
 
       <div class="save-section">
-        <h2>Storage</h2>
-        <div class="button-group">
-          <button id="manualSaveBtn" class="btn btn-secondary">Manual Save</button>
-          <button id="exportBtn" class="btn btn-secondary">Export JSON</button>
-          <button id="importBtn" class="btn btn-secondary">Import JSON</button>
-        </div>
+        <span class="section-label">Storage:</span>
+        <button id="manualSaveBtn" class="btn btn-secondary btn-sm">Save</button>
+        <button id="exportBtn" class="btn btn-secondary btn-sm">Export</button>
+        <button id="importBtn" class="btn btn-secondary btn-sm">Import</button>
+        <span class="autosave-indicator" id="autosaveStatus">Autosave: On</span>
         <input type="file" id="importFile" accept=".json" style="display: none;">
-        <div class="autosave-indicator">
-          <span id="autosaveStatus">Autosave: Enabled</span>
-        </div>
       </div>
 
       <div class="settings-section">
-        <h2>Download Settings</h2>
         <details>
-          <summary>Anti-Bot Protection Settings</summary>
+          <summary>Anti-Bot Settings</summary>
           <div class="settings-grid">
             <div class="setting-item">
               <label for="minDelay">Min Delay (ms)</label>
@@ -99,17 +92,15 @@
       </div>
 
       <div class="download-section">
-        <h2>Download Controls</h2>
-        <div class="button-group">
-          <button id="downloadSelectedBtn" class="btn btn-success">Download Selected</button>
-          <button id="selectAllBtn" class="btn btn-secondary">Select All</button>
-          <button id="deselectAllBtn" class="btn btn-secondary">Deselect All</button>
-        </div>
-        <div class="download-stats">
-          <span>Total: <span id="totalPins">0</span></span>
-          <span>Selected: <span id="selectedPins">0</span></span>
-          <span>Downloaded: <span id="downloadedPins">0</span></span>
-        </div>
+        <span class="section-label">Downloads:</span>
+        <button id="downloadSelectedBtn" class="btn btn-success btn-sm">Download</button>
+        <button id="selectAllBtn" class="btn btn-secondary btn-sm">Select All</button>
+        <button id="deselectAllBtn" class="btn btn-secondary btn-sm">Deselect All</button>
+        <span class="download-stats">
+          <span>Total: <strong id="totalPins">0</strong></span>
+          <span>Selected: <strong id="selectedPins">0</strong></span>
+          <span>Downloaded: <strong id="downloadedPins">0</strong></span>
+        </span>
         <div id="downloadProgress" class="download-progress" style="display: none;">
           <div class="progress-info">
             <span id="progressText">Downloading...</span>
@@ -123,9 +114,6 @@
     </div>
 
     <div class="pins-container">
-      <div id="searchBar">
-        <input type="text" id="searchInput" placeholder="Search pins...">
-      </div>
       <div id="pinsList"></div>
     </div>
   </div>

@@ -5,6 +5,46 @@ All notable changes to the Pinterest Pin Downloader extension will be documented
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-01-27
+
+### Added
+- **Automatic Infinite Scroll**: Extension now automatically scrolls Pinterest pages to load ALL pins
+  - Uses MutationObserver to detect when new pins are added to DOM
+  - Intelligent stopping when no more pins are available (3 consecutive scrolls with no change)
+  - Progress logging in console showing pin counts during scrolling
+  - Returns total pins loaded count to user
+  - Works in background tabs without requiring focus
+- **Compact Grid Layout**: New space-efficient 3-column layout for controls
+  - Username input + search input side-by-side in top row
+  - Fetch buttons and view radio buttons integrated into grid
+  - Pinterest connection status in dedicated column (25% width)
+  - All control sections condensed to single-line layouts
+  - Fixed header with scrollable controls (280px max height)
+
+### Changed
+- **Pin Fetching Logic**: Complete rewrite for comprehensive pin collection
+  - Now fetches from exact `/pins/` endpoint instead of profile page
+  - Automatically navigates to correct URL if on wrong page
+  - Scrolls up to 50 times to load all available pins
+  - Waits intelligently for content to load using MutationObserver
+- **UI Spacing**: Dramatically reduced vertical padding across entire interface
+  - Header padding: 20px → 12px
+  - Controls padding: 20px → 12px
+  - Font sizes reduced 1-2px throughout
+  - Pin thumbnails: 80px → 60px
+  - Margins and gaps cut by ~40%
+  - More viewport space dedicated to viewing pins
+
+### Fixed
+- **URL Navigation Bug**: Extension no longer fetches only 2 "pinned to profile" pins
+  - Now uses strict URL normalization to ensure `/pins/` endpoint
+  - Properly distinguishes between profile page and pins page
+  - Shows clear navigation message when redirecting
+- **Incomplete Pin Loading**: Fixed issue where only visible pins (~20-50) were fetched
+  - scrollAndLoadMore() function now actually called during fetch
+  - Pin counting logic more robust than scroll height checking
+  - Handles Pinterest's dynamic content loading correctly
+
 ## [1.1.0] - 2026-01-26
 
 ### Added
@@ -77,6 +117,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Version History
 
+- **1.2.0** (2026-01-27): Complete pin fetching with auto-scroll and compact UI
 - **1.1.0** (2026-01-26): Major update with anti-bot protection and smart tab detection
 - **1.0.0** (2026-01-26): Initial release with core functionality
 

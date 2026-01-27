@@ -267,9 +267,12 @@ async function fetchAllPins() {
 
       if (response && response.success) {
         processFetchedPins(response.pins, username);
-        showStatus(`Successfully fetched ${response.pins.length} pins!`, 'success');
+        const scrollInfo = response.scrolledPins ? ` (loaded ${response.scrolledPins} via scrolling)` : '';
+        showStatus(`Successfully fetched ${response.pins.length} pins${scrollInfo}!`, 'success');
+      } else if (response && response.needsRetry) {
+        showStatus(response.error, 'warning');
       } else {
-        showStatus('Failed to fetch pins. Try again.', 'error');
+        showStatus('Failed to fetch pins. ' + (response?.error || 'Try again.'), 'error');
       }
       document.getElementById('fetchAllBtn').disabled = false;
     });
@@ -315,9 +318,12 @@ async function fetchByBoards() {
 
       if (response && response.success) {
         processFetchedPins(response.pins, username, response.boards);
-        showStatus(`Successfully fetched ${response.pins.length} pins from ${Object.keys(response.boards).length} boards!`, 'success');
+        const scrollInfo = response.scrolledPins ? ` (loaded ${response.scrolledPins} via scrolling)` : '';
+        showStatus(`Successfully fetched ${response.pins.length} pins from ${Object.keys(response.boards).length} boards${scrollInfo}!`, 'success');
+      } else if (response && response.needsRetry) {
+        showStatus(response.error, 'warning');
       } else {
-        showStatus('Failed to fetch pins. Try again.', 'error');
+        showStatus('Failed to fetch pins. ' + (response?.error || 'Try again.'), 'error');
       }
       document.getElementById('fetchByBoardBtn').disabled = false;
     });

@@ -4,17 +4,22 @@ A Chrome extension for managing and downloading Pinterest pins with local tracki
 
 validated? : no 🌿
 
-**Latest Update**: Added robust anti-bot protection with configurable settings, randomized delays, batch processing, exponential backoff retry logic, and duplicate download prevention.
+**Latest Update**: Complete pin fetching with automatic infinite scroll, fixed URL navigation bug, and compact space-efficient UI with grid layout.
 
 ## Features
 
-- **Fetch Pinterest Pins**: Automatically collect all pins from a Pinterest account
+- **Fetch Pinterest Pins**: Automatically collect ALL pins from a Pinterest account
+  - Intelligent auto-scrolling to load complete pin collections
+  - Works in background tabs without requiring focus
+  - Navigates to correct `/pins/` endpoint automatically
+  - Progress logging shows how many pins are being loaded
 - **Board Organization**: Group pins by boards or view all at once
 - **Local Storage**: Automatically saves your pin lists locally
 - **Download Management**: Download pins with progress tracking
 - **Download Status**: Track which pins have been downloaded to avoid duplicates
 - **Search & Filter**: Easily search through your pin collections
 - **Export/Import**: Backup and restore your pin data
+- **Compact UI**: Space-efficient grid layout maximizes pin viewing area
 - **Anti-Bot Protection**: Built-in safeguards to avoid detection and rate limiting
   - Randomized delays between downloads
   - Batch processing with configurable intervals
@@ -51,16 +56,20 @@ You can use online tools like:
 ### 1. Fetching Pins
 
 1. Navigate to Pinterest.com and log in to your account
-2. Click the extension icon to open the popup
+2. Click the extension icon to open in a new tab
 3. Enter your Pinterest username (the part after pinterest.com/)
 4. Choose one of the fetch options:
    - **Fetch All Pins**: Gets all pins in a single list
    - **Fetch by Boards**: Organizes pins by their boards
 
-**Note**: Due to Pinterest's dynamic loading, you may need to:
-- Be on your Pinterest profile page
-- Scroll down to load more pins before fetching
-- Click the fetch button multiple times to capture all pins
+**How It Works**:
+- Extension automatically navigates to your `/pins/` page if needed
+- Scrolls automatically to load ALL pins using infinite scroll
+- Uses intelligent detection to know when all pins are loaded
+- Shows progress in console and status message
+- Works in background - Pinterest tab doesn't need focus
+
+**Note**: Fetching large collections (500+ pins) may take 30-60 seconds as the extension scrolls through all content.
 
 ### 2. Viewing and Organizing
 
@@ -169,10 +178,10 @@ Downloads/
 
 ## Limitations
 
-1. **Pinterest's Dynamic Content**: Pinterest loads content dynamically, so:
-   - You need to be on the Pinterest page when fetching
-   - You may need to scroll to load all pins before fetching
-   - Very large pin collections may require multiple fetch attempts
+1. **Pinterest's Dynamic Content**: Pinterest loads content dynamically
+   - Extension automatically handles scrolling and loading
+   - Large collections (1000+ pins) may take 1-2 minutes to fully load
+   - Requires being logged into Pinterest
 
 2. **Rate Limiting Protection**: To avoid triggering Pinterest's anti-bot systems:
    - Downloads use randomized delays and batch processing
@@ -191,9 +200,10 @@ Downloads/
 
 ### Pins Not Fetching
 - Make sure you're logged into Pinterest
-- Navigate to your profile page (pinterest.com/your-username)
-- Scroll down to load more pins
-- Try refreshing the page and fetching again
+- Ensure you have a Pinterest tab open (any Pinterest page is fine)
+- Extension will automatically navigate to the correct `/pins/` page
+- Check console for progress logs showing scroll activity
+- If it says "Navigating to pins page", wait 3-4 seconds and click fetch again
 
 ### Downloads Not Working
 - Check that Chrome has permission to download files
