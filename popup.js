@@ -304,6 +304,7 @@ async function loadSelectedBoards() {
 
   const previousPinIds = new Set(Object.keys(archive.pins).filter(id => archive.pins[id].profile === username));
   let totalNew = 0;
+  let totalUpdated = 0;
   let totalPins = 0;
   const verificationResults = []; // { boardName, scraped, expected, match }
 
@@ -382,6 +383,7 @@ async function loadSelectedBoards() {
           existing.title = pin.title || existing.title;
           existing.image = pin.image || existing.image;
           existing.thumbnail = pin.thumbnail || existing.thumbnail;
+          totalUpdated++;
         } else {
           archive.pins[pin.id] = {
             ...pin,
@@ -431,11 +433,12 @@ async function loadSelectedBoards() {
 
     // Show verification summary — flag mismatches
     const mismatches = verificationResults.filter(v => !v.match);
+    const countSummary = `${totalPins} pins (${totalNew} new, ${totalUpdated} updated)`;
     if (mismatches.length > 0) {
       const details = mismatches.map(m => `${m.boardName}: ${m.scraped}/${m.expected ?? '?'}`).join(', ');
-      showStatus(`Loaded ${totalPins} pins (${totalNew} new). ⚠ Incomplete boards: ${details}`, 'warning');
+      showStatus(`Loaded ${countSummary}. ⚠ Incomplete boards: ${details}`, 'warning');
     } else {
-      showStatus(`Loaded ${totalPins} pins (${totalNew} new) from ${selectedBoards.length} boards`, 'success');
+      showStatus(`Loaded ${countSummary} from ${selectedBoards.length} boards`, 'success');
     }
 
     renderPins();
@@ -787,6 +790,7 @@ function renderPins() {
           </div>
           <div class="board-stats">
             ${boardPins.length} pins · ${selected} selected · ${downloaded} downloaded${newCount ? ` · <span class="new-badge">${newCount} new</span>` : ''}
+            <button class="btn btn-sm btn-secondary board-select-all-btn" data-board="${esc(boardName)}">Select All</button>
           </div>
         </div>
         <div class="board-pins-list">
@@ -836,6 +840,27 @@ function attachPinListeners() {
       const pinsList = header.nextElementSibling;
       pinsList.style.display = collapsed ? '' : 'none';
       header.querySelector('.board-chevron').textContent = collapsed ? '▼' : '▶';
+    });
+  });
+
+  // Per-board select all
+  el('pinsList').querySelectorAll('.board-select-all-btn').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation(); // don't toggle collapse
+      const boardName = btn.dataset.board;
+      const group = btn.closest('.board-group');
+      const allChecked = [...group.querySelectorAll('.pin-checkbox')].every(cb => cb.checked);
+      const newValue = !allChecked;
+      group.querySelectorAll('.pin-item').forEach(item => {
+        const pinId = item.dataset.pinId;
+        if (archive.pins[pinId]) {
+          archive.pins[pinId].selected = newValue;
+        }
+        item.querySelector('.pin-checkbox').checked = newValue;
+      });
+      btn.textContent = newValue ? 'Deselect All' : 'Select All';
+      triggerAutosave();
+      updateStats();
     });
   });
 
