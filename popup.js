@@ -591,8 +591,8 @@ async function runDownload(pins) {
     saveState();
 
     for (const pin of batch) {
-      const ok = await downloadPinWithRetry(pin);
-      if (ok) {
+      const result = await downloadPinWithRetry(pin);
+      if (result === true) {
         downloadState.completed++;
         archive.downloads.completed++;
         pin.downloaded = true;
@@ -600,6 +600,8 @@ async function runDownload(pins) {
       } else {
         downloadState.failed++;
         archive.downloads.failed++;
+        console.warn(`[Pinterest Pin DL] Download failed for pin ${pin.id}:`, result || 'unknown error',
+          `image: ${pin.image}, thumbnail: ${pin.thumbnail}`);
       }
       updateDownloadProgress();
       await sleep(randomDelay());
