@@ -499,6 +499,11 @@ async function scrapeAccurateCounts() {
 
     await sendOverlay(tab.id, 'overlay-hide').catch(() => {});
 
+    // Close the dedicated tab — scrape counts is a background operation
+    try { chrome.tabs.remove(tab.id); } catch { /* ok */ }
+    selectedPinterestTab = null;
+    refreshTabStatus();
+
     saveState();
     renderBoards();
     showStatus(`Updated pin counts for ${updated}/${boardNames.length} boards`, 'success');

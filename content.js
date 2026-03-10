@@ -10,24 +10,24 @@ let overlayEl = null;
 let overlayState = { cancelled: false, skipBoard: false, awaitConfirm: false, confirmResolve: null };
 
 // Auto-restore overlay on page load if a session is active
-chrome.storage.session.get('overlaySession', (result) => {
-  if (result.overlaySession?.active) {
+chrome.storage.local.get('_overlaySession', (result) => {
+  if (result._overlaySession?.active) {
     createOverlay();
     updateOverlayStatus(
-      result.overlaySession.text || 'Loading...',
-      result.overlaySession.current || 0,
-      result.overlaySession.total || 0
+      result._overlaySession.text || 'Loading...',
+      result._overlaySession.current || 0,
+      result._overlaySession.total || 0
     );
   }
 });
 
 /** Persist overlay state so it survives page navigations */
 function persistOverlaySession(text, current, total) {
-  chrome.storage.session.set({ overlaySession: { active: true, text, current, total } });
+  chrome.storage.local.set({ _overlaySession: { active: true, text, current, total } });
 }
 
 function clearOverlaySession() {
-  chrome.storage.session.set({ overlaySession: { active: false } });
+  chrome.storage.local.set({ _overlaySession: { active: false } });
 }
 
 function createOverlay() {
