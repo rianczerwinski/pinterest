@@ -9,6 +9,27 @@ console.log('Pinterest Pin Downloader content script loaded');
 let overlayEl = null;
 let overlayState = { cancelled: false, skipBoard: false, awaitConfirm: false, confirmResolve: null };
 
+// Auto-restore overlay on page load if a session is active
+chrome.storage.session.get('overlaySession', (result) => {
+  if (result.overlaySession?.active) {
+    createOverlay();
+    updateOverlayStatus(
+      result.overlaySession.text || 'Loading...',
+      result.overlaySession.current || 0,
+      result.overlaySession.total || 0
+    );
+  }
+});
+
+/** Persist overlay state so it survives page navigations */
+function persistOverlaySession(text, current, total) {
+  chrome.storage.session.set({ overlaySession: { active: true, text, current, total } });
+}
+
+function clearOverlaySession() {
+  chrome.storage.session.set({ overlaySession: { active: false } });
+}
+
 function createOverlay() {
   if (overlayEl) return;
   overlayEl = document.createElement('div');
@@ -153,23 +174,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'overlay-show') {
     createOverlay();
     updateOverlayStatus(message.text || 'Starting...', message.current || 0, message.total || 0);
+    persistOverlaySession(message.text || 'Starting...', message.current || 0, message.total || 0);
     sendResponse({ success: true });
     return false;
   }
   if (message.action === 'overlay-update') {
     updateOverlayStatus(message.text, message.current || 0, message.total || 0);
     if (message.scraped != null) updateOverlayVerification(message.scraped, message.expected);
+    persistOverlaySession(message.text, message.current || 0, message.total || 0);
     sendResponse({ success: true });
     return false;
   }
   if (message.action === 'overlay-await-confirm') {
     showOverlayConfirmButton();
     updateOverlayStatus(message.text || 'Board complete — review and continue', message.current || 0, message.total || 0);
+    persistOverlaySession(message.text || 'Board complete', message.current || 0, message.total || 0);
     sendResponse({ success: true });
     return false;
   }
   if (message.action === 'overlay-hide') {
     removeOverlay();
+    clearOverlaySession();
     sendResponse({ success: true });
     return false;
   }
@@ -656,6 +681,9 @@ async function scrollAndLoadMore(maxScrolls = 300) {
   let sameCountIterations = 0;
 
   while (scrollCount < maxScrolls) {
+    // Check for cancel/skip from overlay — makes buttons responsive mid-scroll
+    if (overlayState.cancelled || overlayState.skipBoard) break;
+
     window.scrollTo(0, document.body.scrollHeight);
     await waitForNewContent(2000);
 
@@ -672,7 +700,12 @@ async function scrollAndLoadMore(maxScrolls = 300) {
     lastPinCount = currentPinCount;
     scrollCount++;
 
-    // Log progress every 10 scrolls for visibility
+    // Update overlay with scroll progress every 5 scrolls
+    if (scrollCount % 5 === 0 && overlayEl) {
+      updateOverlayStatus(`Scrolling... ${currentPinCount} pins loaded`, 0, 0);
+    }
+
+    // Log to console every 10 scrolls
     if (scrollCount % 10 === 0) {
       console.log(`[Pinterest Pin DL] Scroll ${scrollCount}: ${currentPinCount} pins loaded`);
     }

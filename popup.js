@@ -436,11 +436,14 @@ async function scrapeAccurateCounts() {
   if (!username || !archive.profiles[username]) return;
 
   const profile = archive.profiles[username];
-  const boardNames = Object.keys(profile.boards);
-  if (boardNames.length === 0) { showStatus('No boards to scrape', 'error'); return; }
+  const boardNames = Object.entries(boardSelections)
+    .filter(([, selected]) => selected)
+    .map(([name]) => name)
+    .filter(name => profile.boards[name]);
+  if (boardNames.length === 0) { showStatus('No boards selected', 'error'); return; }
 
   el('scrapeCountsBtn').disabled = true;
-  showStatus(`Scraping pin counts for ${boardNames.length} boards...`, 'info');
+  showStatus(`Scraping pin counts for ${boardNames.length} selected boards...`, 'info');
 
   try {
     const tab = await getTab();
