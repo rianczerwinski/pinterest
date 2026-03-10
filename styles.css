@@ -225,17 +225,28 @@ header h1 { font-size: 16px; font-weight: 600; }
 #pinsList { display: flex; flex-direction: column; gap: 10px; }
 
 .board-group {
-  background: white; border-radius: 6px; padding: 10px;
+  background: white; border-radius: 6px;
   box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  overflow: hidden;
 }
 .board-header {
   display: flex; justify-content: space-between; align-items: center;
-  padding-bottom: 8px; margin-bottom: 8px;
+  padding: 10px; cursor: pointer; user-select: none;
   border-bottom: 2px solid #e60023;
+  position: sticky; top: 0; z-index: 10;
+  background: white;
+  transition: background 0.15s;
+}
+.board-header:hover { background: #fafafa; }
+.board-header-left { display: flex; align-items: center; gap: 8px; }
+.board-chevron {
+  font-size: 11px; color: #888; width: 14px; text-align: center;
+  transition: transform 0.15s;
 }
 .board-title { font-size: 14px; font-weight: 600; color: #333; }
 .board-stats { font-size: 11px; color: #666; }
 .new-badge { color: #2e7d32; font-weight: 600; }
+.board-pins-list { padding: 4px 10px 10px; }
 
 .pin-item {
   display: flex; align-items: center;

@@ -779,14 +779,19 @@ function renderPins() {
     const newCount = boardPins.filter(p => newPinIds.has(p.id)).length;
 
     return `
-      <div class="board-group">
-        <div class="board-header">
-          <h3 class="board-title">${esc(boardName)}</h3>
+      <div class="board-group" data-board-group="${esc(boardName)}">
+        <div class="board-header" data-collapsed="false">
+          <div class="board-header-left">
+            <span class="board-chevron">▼</span>
+            <h3 class="board-title">${esc(boardName)}</h3>
+          </div>
           <div class="board-stats">
             ${boardPins.length} pins · ${selected} selected · ${downloaded} downloaded${newCount ? ` · <span class="new-badge">${newCount} new</span>` : ''}
           </div>
         </div>
-        ${boardPins.map(pin => pinHTML(pin)).join('')}
+        <div class="board-pins-list">
+          ${boardPins.map(pin => pinHTML(pin)).join('')}
+        </div>
       </div>
     `;
   }).join('');
@@ -823,6 +828,17 @@ function pinHTML(pin) {
 const PLACEHOLDER_SVG = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2260%22 height=%2260%22%3E%3Crect fill=%22%23ddd%22 width=%2260%22 height=%2260%22/%3E%3C/svg%3E';
 
 function attachPinListeners() {
+  // Collapse/expand board groups
+  el('pinsList').querySelectorAll('.board-header').forEach(header => {
+    header.addEventListener('click', () => {
+      const collapsed = header.dataset.collapsed === 'true';
+      header.dataset.collapsed = collapsed ? 'false' : 'true';
+      const pinsList = header.nextElementSibling;
+      pinsList.style.display = collapsed ? '' : 'none';
+      header.querySelector('.board-chevron').textContent = collapsed ? '▼' : '▶';
+    });
+  });
+
   el('pinsList').querySelectorAll('.pin-thumbnail').forEach(img => {
     img.addEventListener('error', () => { img.src = PLACEHOLDER_SVG; }, { once: true });
   });
