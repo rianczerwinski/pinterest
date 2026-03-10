@@ -1,8 +1,21 @@
-# Pinterest Pin Downloader
+# pinterest-pin/
+
+Reference implementation: standalone Pinterest Chrome extension. Cloned from `github.com/rianczerwinski/pinterest` for domain research — not integrated into Octopus.
+
+## Purpose within Octopus
+
+Domain research for a future Pinterest plugin. This extension demonstrates:
+- Pinterest's data model (pins, boards, image URLs at multiple resolutions)
+- The `resource_response` JSON format Pinterest's internal API returns
+- Why DOM scraping may be more reliable than API interception for Pinterest (see ADR-005)
+
+Code is architecturally incompatible with Octopus (DOM scraping vs fetch interception, chrome.downloads vs IDB+sync, chrome.storage vs server). Value is as a field guide, not as code to merge.
+
+## Original description
 
 A Chrome extension for managing and downloading Pinterest pins with local tracking and organization.
 
-validated? : no 🌿
+validated? : no
 
 **Latest Update**: Complete pin fetching with automatic infinite scroll, fixed URL navigation bug, and compact space-efficient UI with grid layout.
 
