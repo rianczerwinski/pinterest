@@ -800,8 +800,7 @@ function pinHTML(pin) {
     <div class="pin-item ${dlClass}" data-pin-id="${pin.id}">
       <input type="checkbox" class="pin-checkbox" ${pin.selected ? 'checked' : ''}>
       ${newDot}
-      <img src="${esc(pin.thumbnail || pin.image || '')}" alt="${esc(pin.title || '')}" class="pin-thumbnail"
-        onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2260%22 height=%2260%22%3E%3Crect fill=%22%23ddd%22 width=%2260%22 height=%2260%22/%3E%3C/svg%3E'">
+      <img src="${esc(pin.thumbnail || pin.image || '')}" alt="${esc(pin.title || '')}" class="pin-thumbnail">
       <div class="pin-info">
         <div class="pin-title">${esc(pin.title || 'Untitled Pin')}</div>
         <div class="pin-meta">${esc(pin.board || '')} · ${pin.id}</div>
@@ -814,7 +813,13 @@ function pinHTML(pin) {
   `;
 }
 
+const PLACEHOLDER_SVG = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2260%22 height=%2260%22%3E%3Crect fill=%22%23ddd%22 width=%2260%22 height=%2260%22/%3E%3C/svg%3E';
+
 function attachPinListeners() {
+  el('pinsList').querySelectorAll('.pin-thumbnail').forEach(img => {
+    img.addEventListener('error', () => { img.src = PLACEHOLDER_SVG; }, { once: true });
+  });
+
   el('pinsList').querySelectorAll('.pin-checkbox').forEach(cb => {
     cb.addEventListener('change', e => {
       const pinId = e.target.closest('.pin-item').dataset.pinId;
