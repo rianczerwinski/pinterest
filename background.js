@@ -33,18 +33,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // Download image function
 async function downloadImage(url, filename, pinId) {
   try {
-    const blob = await fetchImageBlob(url);
-    if (!blob) {
+    const result = await fetchImageAsDataUrl(url);
+    if (!result) {
       return { success: false, error: `Failed to fetch image: ${url}` };
     }
 
-    const extension = blob.type.split('/')[1] || 'jpg';
+    const extension = result.type.split('/')[1] || 'jpg';
     const filenameWithExt = filename.replace(/\.(jpg|png|gif|webp)$/i, '') + '.' + extension;
-    const objectUrl = URL.createObjectURL(blob);
 
     return new Promise((resolve, reject) => {
       chrome.downloads.download({
-        url: objectUrl,
+        url: result.dataUrl,
         filename: filenameWithExt,
         conflictAction: 'uniquify',
         saveAs: false
@@ -80,35 +79,41 @@ async function downloadImage(url, filename, pinId) {
   }
 }
 
-/** Fetch image blob with fallback: try /originals/ first, fall back to /736x/ */
-async function fetchImageBlob(url) {
+/** Fetch image and convert to data URL (service workers don't have URL.createObjectURL) */
+async function fetchImageAsDataUrl(url) {
   // Try the URL as-is first
-  try {
-    const resp = await fetch(url);
-    if (resp.ok) {
-      const blob = await resp.blob();
-      // Accept if it has any size — pinimg.com sometimes returns octet-stream instead of image/*
-      if (blob.size > 0) return blob;
-    }
-  } catch (err) {
-    console.log(`[Pinterest Pin DL] Fetch failed for ${url}:`, err.message);
-  }
+  const result = await tryFetchAsDataUrl(url);
+  if (result) return result;
 
-  // If URL was upgraded to /originals/, fall back to the thumbnail resolution
+  // If URL was upgraded to /originals/, fall back to /736x/
   if (url.includes('/originals/')) {
     const fallback = url.replace('/originals/', '/736x/');
     console.log(`[Pinterest Pin DL] /originals/ failed, trying /736x/: ${fallback}`);
-    try {
-      const resp = await fetch(fallback);
-      if (resp.ok) {
-        const blob = await resp.blob();
-        if (blob.size > 0) return blob;
-      }
-    } catch { /* give up */ }
+    const fallbackResult = await tryFetchAsDataUrl(fallback);
+    if (fallbackResult) return fallbackResult;
   }
 
   console.warn(`[Pinterest Pin DL] Failed to fetch image: ${url}`);
   return null;
+}
+
+async function tryFetchAsDataUrl(url) {
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) return null;
+    const buf = await resp.arrayBuffer();
+    if (buf.byteLength === 0) return null;
+    const type = resp.headers.get('content-type') || 'image/jpeg';
+    // Convert ArrayBuffer → base64 data URL
+    const bytes = new Uint8Array(buf);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    const dataUrl = `data:${type};base64,${btoa(binary)}`;
+    return { dataUrl, type };
+  } catch (err) {
+    console.log(`[Pinterest Pin DL] Fetch failed for ${url}:`, err.message);
+    return null;
+  }
 }
 
 // Handle installation
