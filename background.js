@@ -80,15 +80,19 @@ async function downloadImage(url, filename, pinId) {
   }
 }
 
-/** Fetch image blob with fallback: try /originals/ first, fall back to original URL */
+/** Fetch image blob with fallback: try /originals/ first, fall back to /736x/ */
 async function fetchImageBlob(url) {
   // Try the URL as-is first
   try {
     const resp = await fetch(url);
-    if (resp.ok && resp.headers.get('content-type')?.startsWith('image/')) {
-      return await resp.blob();
+    if (resp.ok) {
+      const blob = await resp.blob();
+      // Accept if it has any size — pinimg.com sometimes returns octet-stream instead of image/*
+      if (blob.size > 0) return blob;
     }
-  } catch { /* try fallback */ }
+  } catch (err) {
+    console.log(`[Pinterest Pin DL] Fetch failed for ${url}:`, err.message);
+  }
 
   // If URL was upgraded to /originals/, fall back to the thumbnail resolution
   if (url.includes('/originals/')) {
@@ -96,8 +100,9 @@ async function fetchImageBlob(url) {
     console.log(`[Pinterest Pin DL] /originals/ failed, trying /736x/: ${fallback}`);
     try {
       const resp = await fetch(fallback);
-      if (resp.ok && resp.headers.get('content-type')?.startsWith('image/')) {
-        return await resp.blob();
+      if (resp.ok) {
+        const blob = await resp.blob();
+        if (blob.size > 0) return blob;
       }
     } catch { /* give up */ }
   }

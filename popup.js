@@ -664,7 +664,7 @@ function downloadPin(pin) {
         pin.downloadPath = response.path;
         resolve(true);
       } else {
-        resolve(false);
+        reject(new Error(response?.error || 'Download returned failure'));
       }
     });
   });
