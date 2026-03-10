@@ -51,6 +51,7 @@ function initEventListeners() {
   el('selectAllBoardsBtn').addEventListener('click', () => setBoardSelections(true));
   el('deselectAllBoardsBtn').addEventListener('click', () => setBoardSelections(false));
   el('loadSelectedBoardsBtn').addEventListener('click', loadSelectedBoards);
+  el('scrapeCountsBtn').addEventListener('click', scrapeAccurateCounts);
 
   // Diff
   el('selectNewPinsBtn').addEventListener('click', selectNewPins);
@@ -66,6 +67,9 @@ function initEventListeners() {
   // Resume
   el('resumeBtn').addEventListener('click', resumeDownload);
   el('clearResumeBtn').addEventListener('click', clearResume);
+
+  // Diagnose
+  el('diagnoseBtn')?.addEventListener('click', runDiagnose);
 
   // Export/Import
   el('exportBtn').addEventListener('click', exportArchive);
@@ -124,8 +128,25 @@ async function getTab() {
 // ── Navigation + extraction ───────────────────────────────
 
 async function navigateAndExtract(tabId, url, mode, options = {}) {
-  await chrome.tabs.update(tabId, { url });
+  // Activate the Pinterest tab — background tabs get throttled and Pinterest
+  // won't render board content in inactive tabs (requestIdleCallback, IntersectionObserver)
+  await chrome.tabs.update(tabId, { url, active: true });
   await waitForTabLoad(tabId);
+  return new Promise((resolve, reject) => {
+    chrome.tabs.sendMessage(tabId, { action: 'extract', mode, options }, response => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+      } else if (!response) {
+        reject(new Error('No response from content script'));
+      } else {
+        resolve(response);
+      }
+    });
+  });
+}
+
+/** Send extraction message to a tab WITHOUT navigating — the page is already loaded */
+function extractFromTab(tabId, mode, options = {}) {
   return new Promise((resolve, reject) => {
     chrome.tabs.sendMessage(tabId, { action: 'extract', mode, options }, response => {
       if (chrome.runtime.lastError) {
@@ -145,7 +166,7 @@ function waitForTabLoad(tabId) {
       if (id === tabId && info.status === 'complete') {
         chrome.tabs.onUpdated.removeListener(listener);
         // Extra delay for Pinterest's client-side rendering
-        setTimeout(resolve, 2000);
+        setTimeout(resolve, 3000);
       }
     };
     chrome.tabs.onUpdated.addListener(listener);
@@ -159,12 +180,25 @@ async function loadProfile() {
   if (!username) { showStatus('Enter a username', 'error'); return; }
 
   currentProfile = username;
-  showStatus('Loading boards...', 'info');
+  showStatus('Loading boards... Make sure the Pinterest tab is on the profile page.', 'info');
   el('loadProfileBtn').disabled = true;
 
   try {
     const tab = await getTab();
-    const result = await navigateAndExtract(tab.id, `https://www.pinterest.com/${username}/`, 'boards');
+
+    // Check if the Pinterest tab is already on the right profile page
+    const profileUrl = `https://www.pinterest.com/${username}/`;
+    const tabUrl = tab.url || '';
+    const onProfile = tabUrl.includes(`pinterest.com/${username}`);
+
+    let result;
+    if (onProfile) {
+      // Already on the profile — extract directly from the live DOM (boards are rendered)
+      result = await extractFromTab(tab.id, 'boards');
+    } else {
+      // Navigate to the profile, activate the tab so Pinterest renders content
+      result = await navigateAndExtract(tab.id, profileUrl, 'boards');
+    }
 
     if (!result.success || !result.boards?.length) {
       showStatus('No boards found. The profile may be private or empty.', 'warning');
@@ -204,6 +238,35 @@ async function loadProfile() {
   el('loadProfileBtn').disabled = false;
 }
 
+// Overlay control state — set by messages relayed from content script via background
+let overlayControls = { cancelled: false, skipBoard: false, awaitConfirm: false, pendingConfirm: null };
+
+// Listen for overlay control messages relayed by background script
+chrome.runtime.onMessage.addListener((message) => {
+  if (message.action === 'overlay-cancel') overlayControls.cancelled = true;
+  if (message.action === 'overlay-skip') overlayControls.skipBoard = true;
+  if (message.action === 'overlay-confirm' && overlayControls.pendingConfirm) {
+    overlayControls.pendingConfirm();
+    overlayControls.pendingConfirm = null;
+  }
+  if (message.action === 'overlay-toggle-confirm') overlayControls.awaitConfirm = message.value;
+});
+
+/** Send an overlay message to the Pinterest tab's content script */
+function sendOverlay(tabId, action, data = {}) {
+  return new Promise(resolve => {
+    chrome.tabs.sendMessage(tabId, { action, ...data }, () => {
+      if (chrome.runtime.lastError) { /* tab may not have content script */ }
+      resolve();
+    });
+  });
+}
+
+/** Wait for the user to click "Continue" on the overlay */
+function waitForOverlayConfirm() {
+  return new Promise(resolve => { overlayControls.pendingConfirm = resolve; });
+}
+
 async function loadSelectedBoards() {
   const username = currentProfile;
   if (!username || !archive.profiles[username]) return;
@@ -218,19 +281,42 @@ async function loadSelectedBoards() {
   el('loadSelectedBoardsBtn').disabled = true;
   showStatus(`Loading pins from ${selectedBoards.length} boards...`, 'info');
 
+  // Reset overlay controls
+  overlayControls = { cancelled: false, skipBoard: false, awaitConfirm: false, pendingConfirm: null };
+
   const previousPinIds = new Set(Object.keys(archive.pins).filter(id => archive.pins[id].profile === username));
   let totalNew = 0;
   let totalPins = 0;
+  const verificationResults = []; // { boardName, scraped, expected, match }
 
   try {
     const tab = await getTab();
 
+    // Show overlay on Pinterest tab
+    await sendOverlay(tab.id, 'overlay-show', {
+      text: `Loading ${selectedBoards.length} boards...`,
+      current: 0, total: selectedBoards.length,
+    });
+
     for (let i = 0; i < selectedBoards.length; i++) {
+      if (overlayControls.cancelled) {
+        showStatus('Cancelled by user', 'warning');
+        break;
+      }
+      if (overlayControls.skipBoard) {
+        overlayControls.skipBoard = false; // reset for next board
+      }
+
       const boardName = selectedBoards[i];
       const boardMeta = profile.boards[boardName];
       if (!boardMeta?.url) continue;
 
-      showStatus(`Loading board ${i + 1}/${selectedBoards.length}: ${boardName}...`, 'info');
+      const statusText = `Board ${i + 1}/${selectedBoards.length}: ${boardName}`;
+      showStatus(`Loading ${statusText}...`, 'info');
+      await sendOverlay(tab.id, 'overlay-update', {
+        text: `Loading ${statusText}...`,
+        current: i, total: selectedBoards.length,
+      });
 
       const result = await navigateAndExtract(
         tab.id,
@@ -238,7 +324,33 @@ async function loadSelectedBoards() {
         'pins'
       );
 
-      if (!result.success || !result.pins?.length) continue;
+      if (overlayControls.skipBoard) {
+        overlayControls.skipBoard = false;
+        continue;
+      }
+
+      if (!result.success || !result.pins?.length) {
+        verificationResults.push({ boardName, scraped: 0, expected: boardMeta.pinCount, match: false });
+        continue;
+      }
+
+      // Verification: compare scraped count vs expected
+      const expected = result.boardPinCount ?? boardMeta.pinCount;
+      const scraped = result.pins.length;
+      const match = expected == null || scraped >= expected * 0.95;
+      verificationResults.push({ boardName, scraped, expected, match });
+
+      // Update overlay with verification data
+      await sendOverlay(tab.id, 'overlay-update', {
+        text: `${statusText} — ${scraped} pins scraped`,
+        current: i + 1, total: selectedBoards.length,
+        scraped, expected,
+      });
+
+      // If board-level pin count was from the page, update the stored metadata
+      if (result.boardPinCount != null) {
+        boardMeta.pinCount = result.boardPinCount;
+      }
 
       const boardPinIds = [];
       for (const pin of result.pins) {
@@ -247,13 +359,11 @@ async function loadSelectedBoards() {
 
         const existing = archive.pins[pin.id];
         if (existing) {
-          // Update lastSeen, preserve download state
           existing.lastSeen = new Date().toISOString();
           existing.title = pin.title || existing.title;
           existing.image = pin.image || existing.image;
           existing.thumbnail = pin.thumbnail || existing.thumbnail;
         } else {
-          // New pin
           archive.pins[pin.id] = {
             ...pin,
             board: boardName,
@@ -271,7 +381,20 @@ async function loadSelectedBoards() {
 
       boardMeta.pins = boardPinIds;
       boardMeta.lastFetched = new Date().toISOString();
+      saveState();
+
+      // If await-confirm is on, pause for user to review
+      if (overlayControls.awaitConfirm && i < selectedBoards.length - 1) {
+        await sendOverlay(tab.id, 'overlay-await-confirm', {
+          text: `${boardName}: ${scraped} pins scraped${expected ? ` / ${expected} expected` : ''}. Continue?`,
+          current: i + 1, total: selectedBoards.length,
+        });
+        await waitForOverlayConfirm();
+      }
     }
+
+    // Hide overlay
+    await sendOverlay(tab.id, 'overlay-hide').catch(() => {});
 
     saveState();
 
@@ -287,13 +410,81 @@ async function loadSelectedBoards() {
       showDiff(newPinIds.size, totalPins);
     }
 
+    // Show verification summary — flag mismatches
+    const mismatches = verificationResults.filter(v => !v.match);
+    if (mismatches.length > 0) {
+      const details = mismatches.map(m => `${m.boardName}: ${m.scraped}/${m.expected ?? '?'}`).join(', ');
+      showStatus(`Loaded ${totalPins} pins (${totalNew} new). ⚠ Incomplete boards: ${details}`, 'warning');
+    } else {
+      showStatus(`Loaded ${totalPins} pins (${totalNew} new) from ${selectedBoards.length} boards`, 'success');
+    }
+
     renderPins();
-    showStatus(`Loaded ${totalPins} pins (${totalNew} new) from ${selectedBoards.length} boards`, 'success');
+    renderBoards(); // refresh pin counts
   } catch (err) {
+    // Hide overlay on error
+    try { await sendOverlay((await getTab()).id, 'overlay-hide'); } catch { /* ok */ }
     showStatus(`Error: ${err.message}`, 'error');
   }
 
   el('loadSelectedBoardsBtn').disabled = false;
+}
+
+/** Scrape accurate pin counts by visiting each board page briefly */
+async function scrapeAccurateCounts() {
+  const username = currentProfile;
+  if (!username || !archive.profiles[username]) return;
+
+  const profile = archive.profiles[username];
+  const boardNames = Object.keys(profile.boards);
+  if (boardNames.length === 0) { showStatus('No boards to scrape', 'error'); return; }
+
+  el('scrapeCountsBtn').disabled = true;
+  showStatus(`Scraping pin counts for ${boardNames.length} boards...`, 'info');
+
+  try {
+    const tab = await getTab();
+
+    await sendOverlay(tab.id, 'overlay-show', {
+      text: `Scraping pin counts (0/${boardNames.length})...`,
+      current: 0, total: boardNames.length,
+    });
+
+    let updated = 0;
+    for (let i = 0; i < boardNames.length; i++) {
+      const boardName = boardNames[i];
+      const boardMeta = profile.boards[boardName];
+      if (!boardMeta?.url) continue;
+
+      await sendOverlay(tab.id, 'overlay-update', {
+        text: `Counting: ${boardName} (${i + 1}/${boardNames.length})`,
+        current: i, total: boardNames.length,
+      });
+
+      // Navigate to board page, extract just the pin count
+      const result = await navigateAndExtract(
+        tab.id,
+        `https://www.pinterest.com${boardMeta.url}`,
+        'pinCount'
+      );
+
+      if (result.success && result.pinCount != null) {
+        boardMeta.pinCount = result.pinCount;
+        updated++;
+      }
+    }
+
+    await sendOverlay(tab.id, 'overlay-hide').catch(() => {});
+
+    saveState();
+    renderBoards();
+    showStatus(`Updated pin counts for ${updated}/${boardNames.length} boards`, 'success');
+  } catch (err) {
+    try { await sendOverlay((await getTab()).id, 'overlay-hide'); } catch { /* ok */ }
+    showStatus(`Error: ${err.message}`, 'error');
+  }
+
+  el('scrapeCountsBtn').disabled = false;
 }
 
 // ── Diff ──────────────────────────────────────────────────
@@ -467,12 +658,21 @@ function renderBoards() {
   el('boardSection').style.display = boardNames.length ? '' : 'none';
   el('boardCount').textContent = boardNames.length;
 
+  let truncatedCount = 0;
   const grid = el('boardGrid');
   grid.innerHTML = boardNames.map(name => {
     const b = profile.boards[name];
     const checked = boardSelections[name] !== false;
     const lastFetched = b.lastFetched ? timeAgo(new Date(b.lastFetched).getTime()) : 'never';
     const pinCount = b.pinCount ?? b.pins?.length ?? '?';
+
+    // Flag truncated counts (round thousands suggest "Xk" approximation)
+    const isTruncated = typeof pinCount === 'number' && pinCount >= 1000 && pinCount % 100 === 0;
+    if (isTruncated) truncatedCount++;
+
+    const countDisplay = isTruncated
+      ? `<span title="Approximate — use Scrape Counts for exact number" style="color:#e65100">~${pinCount}</span>`
+      : pinCount;
 
     return `
       <div class="board-card" data-board="${esc(name)}">
@@ -481,12 +681,20 @@ function renderBoards() {
           ${b.coverImage ? `<img src="${esc(b.coverImage)}" class="board-cover" alt="">` : '<div class="board-cover-placeholder"></div>'}
           <div class="board-card-info">
             <div class="board-card-name">${esc(name)}</div>
-            <div class="board-card-meta">${pinCount} pins &middot; ${lastFetched}</div>
+            <div class="board-card-meta">${countDisplay} pins &middot; ${lastFetched}</div>
           </div>
         </label>
       </div>
     `;
   }).join('');
+
+  // Alert if boards have truncated counts
+  if (truncatedCount > 0) {
+    showStatus(
+      `${truncatedCount} board${truncatedCount > 1 ? 's have' : ' has'} approximate pin counts (~Xk). Use "Scrape Counts" for exact numbers.`,
+      'warning'
+    );
+  }
 
   // Attach board checkbox listeners
   grid.querySelectorAll('.board-card').forEach(card => {
@@ -814,6 +1022,31 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 function randomDelay() {
   return Math.floor(Math.random() * (downloadSettings.maxDelay - downloadSettings.minDelay + 1)) + downloadSettings.minDelay;
+}
+
+// ── Diagnose ──────────────────────────────────────────────
+
+async function runDiagnose() {
+  const username = el('usernameInput').value.trim();
+  if (!username) { showStatus('Enter a username first', 'error'); return; }
+
+  showStatus('Running diagnostics...', 'info');
+  try {
+    const tab = await getTab();
+    const result = await navigateAndExtract(tab.id, `https://www.pinterest.com/${username}/`, 'diagnose');
+    if (result.success) {
+      console.log('Pinterest page diagnostic:', JSON.stringify(result.diagnostic, null, 2));
+      const d = result.diagnostic;
+      showStatus(
+        `Diagnostic: ${d.totalLinks} links, data-test-ids: [${d.dataTestIds.join(', ')}], board-pattern links: ${d.boardPatternLinks.length}, PWS: ${d.hasPWSData}, resource_response: ${d.hasResourceResponse}. Check console for full output.`,
+        'info'
+      );
+    } else {
+      showStatus(`Diagnostic failed: ${result.error}`, 'error');
+    }
+  } catch (err) {
+    showStatus(`Diagnostic error: ${err.message}`, 'error');
+  }
 }
 
 function timeAgo(ts) {

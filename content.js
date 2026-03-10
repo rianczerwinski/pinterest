@@ -4,12 +4,183 @@
 
 console.log('Pinterest Pin Downloader content script loaded');
 
+// ── Floating progress overlay ────────────────────────────
+
+let overlayEl = null;
+let overlayState = { cancelled: false, skipBoard: false, awaitConfirm: false, confirmResolve: null };
+
+function createOverlay() {
+  if (overlayEl) return;
+  overlayEl = document.createElement('div');
+  overlayEl.id = 'pin-dl-overlay';
+  overlayEl.innerHTML = `
+    <style>
+      #pin-dl-overlay {
+        position: fixed; bottom: 24px; right: 24px; z-index: 999999;
+        background: #1a1a2e; color: #eee; border-radius: 12px;
+        padding: 16px 20px; min-width: 320px; max-width: 400px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        font-size: 13px; box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+        transition: opacity 0.3s;
+      }
+      #pin-dl-overlay .pdl-title {
+        font-weight: 700; font-size: 14px; margin-bottom: 8px;
+        display: flex; align-items: center; gap: 8px;
+      }
+      #pin-dl-overlay .pdl-title .pdl-dot {
+        width: 8px; height: 8px; border-radius: 50%; background: #4caf50;
+        animation: pdl-pulse 1.2s infinite;
+      }
+      @keyframes pdl-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+      #pin-dl-overlay .pdl-warn {
+        color: #ffb74d; font-size: 11px; margin-bottom: 6px;
+      }
+      #pin-dl-overlay .pdl-status {
+        margin-bottom: 8px; line-height: 1.4;
+      }
+      #pin-dl-overlay .pdl-progress-bar {
+        height: 6px; background: #333; border-radius: 3px; overflow: hidden;
+        margin-bottom: 10px;
+      }
+      #pin-dl-overlay .pdl-progress-fill {
+        height: 100%; background: linear-gradient(90deg, #e60023, #ff6b6b);
+        border-radius: 3px; transition: width 0.3s;
+      }
+      #pin-dl-overlay .pdl-buttons {
+        display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+      }
+      #pin-dl-overlay .pdl-btn {
+        padding: 5px 12px; border: none; border-radius: 6px;
+        font-size: 12px; font-weight: 600; cursor: pointer;
+        transition: background 0.15s;
+      }
+      #pin-dl-overlay .pdl-btn-cancel { background: #e60023; color: white; }
+      #pin-dl-overlay .pdl-btn-cancel:hover { background: #cc001f; }
+      #pin-dl-overlay .pdl-btn-skip { background: #555; color: white; }
+      #pin-dl-overlay .pdl-btn-skip:hover { background: #666; }
+      #pin-dl-overlay .pdl-btn-confirm { background: #4caf50; color: white; }
+      #pin-dl-overlay .pdl-btn-confirm:hover { background: #43a047; }
+      #pin-dl-overlay .pdl-toggle {
+        display: flex; align-items: center; gap: 6px;
+        font-size: 11px; color: #aaa; margin-top: 8px;
+      }
+      #pin-dl-overlay .pdl-toggle input { accent-color: #e60023; }
+      #pin-dl-overlay .pdl-verification {
+        font-size: 11px; color: #aaa; margin-top: 4px;
+      }
+      #pin-dl-overlay .pdl-verification .pdl-match { color: #4caf50; }
+      #pin-dl-overlay .pdl-verification .pdl-mismatch { color: #ffb74d; }
+    </style>
+    <div class="pdl-title"><span class="pdl-dot"></span> Pin Downloader Active</div>
+    <div class="pdl-warn">⚠ Don't touch this tab — loading in progress</div>
+    <div class="pdl-status" id="pdl-status">Initializing...</div>
+    <div class="pdl-progress-bar"><div class="pdl-progress-fill" id="pdl-progress" style="width:0%"></div></div>
+    <div class="pdl-verification" id="pdl-verification"></div>
+    <div class="pdl-buttons">
+      <button class="pdl-btn pdl-btn-cancel" id="pdl-cancel">Cancel</button>
+      <button class="pdl-btn pdl-btn-skip" id="pdl-skip">Skip Board</button>
+      <button class="pdl-btn pdl-btn-confirm" id="pdl-confirm" style="display:none">Continue →</button>
+    </div>
+    <div class="pdl-toggle">
+      <label><input type="checkbox" id="pdl-await-toggle"> Confirm after each board</label>
+    </div>
+  `;
+  document.body.appendChild(overlayEl);
+
+  document.getElementById('pdl-cancel').addEventListener('click', () => {
+    overlayState.cancelled = true;
+    chrome.runtime.sendMessage({ action: 'overlay-cancel' });
+    updateOverlayStatus('Cancelling...', 0, 0);
+  });
+  document.getElementById('pdl-skip').addEventListener('click', () => {
+    overlayState.skipBoard = true;
+    chrome.runtime.sendMessage({ action: 'overlay-skip' });
+  });
+  document.getElementById('pdl-confirm').addEventListener('click', () => {
+    if (overlayState.confirmResolve) {
+      overlayState.confirmResolve();
+      overlayState.confirmResolve = null;
+      document.getElementById('pdl-confirm').style.display = 'none';
+    }
+    chrome.runtime.sendMessage({ action: 'overlay-confirm' });
+  });
+  document.getElementById('pdl-await-toggle').addEventListener('change', (e) => {
+    overlayState.awaitConfirm = e.target.checked;
+    chrome.runtime.sendMessage({ action: 'overlay-toggle-confirm', value: e.target.checked });
+  });
+}
+
+function updateOverlayStatus(text, current, total) {
+  if (!overlayEl) createOverlay();
+  const statusEl = document.getElementById('pdl-status');
+  const progressEl = document.getElementById('pdl-progress');
+  if (statusEl) statusEl.textContent = text;
+  if (progressEl && total > 0) {
+    progressEl.style.width = `${Math.round((current / total) * 100)}%`;
+  }
+}
+
+function updateOverlayVerification(scraped, expected) {
+  if (!overlayEl) return;
+  const el = document.getElementById('pdl-verification');
+  if (!el) return;
+  if (expected == null) {
+    el.textContent = `Scraped: ${scraped} pins`;
+  } else if (scraped >= expected * 0.95) {
+    el.innerHTML = `Scraped: ${scraped} / ${expected} pins <span class="pdl-match">✓</span>`;
+  } else {
+    el.innerHTML = `Scraped: ${scraped} / ${expected} pins <span class="pdl-mismatch">⚠ incomplete</span>`;
+  }
+}
+
+function showOverlayConfirmButton() {
+  if (!overlayEl) return;
+  document.getElementById('pdl-confirm').style.display = '';
+}
+
+function removeOverlay() {
+  if (overlayEl) {
+    overlayEl.remove();
+    overlayEl = null;
+  }
+  overlayState = { cancelled: false, skipBoard: false, awaitConfirm: false, confirmResolve: null };
+}
+
+// ── Message handler ──────────────────────────────────────
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Overlay control messages from popup
+  if (message.action === 'overlay-show') {
+    createOverlay();
+    updateOverlayStatus(message.text || 'Starting...', message.current || 0, message.total || 0);
+    sendResponse({ success: true });
+    return false;
+  }
+  if (message.action === 'overlay-update') {
+    updateOverlayStatus(message.text, message.current || 0, message.total || 0);
+    if (message.scraped != null) updateOverlayVerification(message.scraped, message.expected);
+    sendResponse({ success: true });
+    return false;
+  }
+  if (message.action === 'overlay-await-confirm') {
+    showOverlayConfirmButton();
+    updateOverlayStatus(message.text || 'Board complete — review and continue', message.current || 0, message.total || 0);
+    sendResponse({ success: true });
+    return false;
+  }
+  if (message.action === 'overlay-hide') {
+    removeOverlay();
+    sendResponse({ success: true });
+    return false;
+  }
+
   if (message.action !== 'extract') return false;
 
   const handler = {
     boards: () => extractBoards(),
     pins: () => extractPins(message.options),
+    pinCount: () => Promise.resolve({ success: true, pinCount: extractBoardPagePinCount() }),
+    diagnose: () => diagnosePage(),
   }[message.mode];
 
   if (!handler) {
@@ -27,55 +198,67 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // ── Board extraction ──────────────────────────────────────
 
 async function extractBoards() {
-  // Wait for board elements to render
-  await waitForSelector('[data-test-id="board-card"], [data-test-id="board"], a[href*="/board/"], [class*="BoardCard"], [class*="boardCard"]', 8000);
+  // Pinterest profile pages are fully client-rendered — boards appear only after
+  // React hydrates and fetches data via XHR. We need to wait for actual board
+  // links to appear in the DOM, not data-test-id attributes (which don't exist
+  // on board cards in the current Pinterest UI).
+
+  // Extract username from current URL to identify board links
+  const pathMatch = window.location.pathname.match(/^\/([^/]+)\/?$/);
+  const username = pathMatch ? pathMatch[1] : null;
+
+  // Wait for board links to render — these are <a> tags with href="/{username}/{slug}/"
+  // Also wait for cover images which use elementtiming="cover-image"
+  await waitForBoardContent(username, 15000);
 
   const boards = [];
   const seen = new Set();
+  const skipSlugs = new Set([
+    'pins', '_saved', '_created', '_drafts', 'followers', 'following',
+    'settings', 'topics', 'ideas', 'tried'
+  ]);
 
-  // Strategy 1: board card elements
-  const boardCards = document.querySelectorAll('[data-test-id="board-card"], [data-test-id="board"]');
-  for (const card of boardCards) {
-    const board = parseBoardCard(card);
-    if (board && !seen.has(board.url)) {
-      seen.add(board.url);
-      boards.push(board);
-    }
+  // Strategy 1: find board links by URL pattern /{username}/{slug}/
+  const links = document.querySelectorAll('a[href]');
+  for (const link of links) {
+    const href = link.getAttribute('href');
+    if (!href) continue;
+    // Skip non-board paths
+    if (href.includes('/pin/') || href.includes('/pins/') || href.includes('/_saved/')
+        || href.includes('/settings/') || href.includes('/today')
+        || href.startsWith('http')) continue;
+
+    const boardMatch = href.match(/^\/([^/]+)\/([^/]+)\/?$/);
+    if (!boardMatch) continue;
+
+    const [, linkUser, boardSlug] = boardMatch;
+    // Must match the profile username (or the username we navigated to)
+    if (username && linkUser !== username) continue;
+    if (skipSlugs.has(boardSlug)) continue;
+
+    const url = `/${linkUser}/${boardSlug}/`;
+    if (seen.has(url)) continue;
+    seen.add(url);
+
+    // Walk up to find the board card container
+    const cardContainer = link.closest('[role="listitem"]') || link.parentElement?.parentElement?.parentElement;
+
+    const name = extractBoardNameFromCard(link, cardContainer)
+      || decodeURIComponent(boardSlug).replace(/-/g, ' ');
+    const coverImg = link.querySelector('img[elementtiming="cover-image"]')
+      || link.querySelector('img')
+      || cardContainer?.querySelector('img');
+    const pinCount = extractPinCount(cardContainer);
+
+    boards.push({
+      name,
+      url,
+      coverImage: coverImg?.src || null,
+      pinCount,
+    });
   }
 
-  // Strategy 2: board links in profile grid
-  if (boards.length === 0) {
-    const links = document.querySelectorAll('a[href]');
-    for (const link of links) {
-      const href = link.getAttribute('href');
-      // Board URLs: /{username}/{board-name}/ (not /pins/, not /pin/, not /_saved/)
-      if (!href || href.includes('/pin/') || href.includes('/pins/') || href.includes('/_saved/') || href.includes('/settings/')) continue;
-      const boardMatch = href.match(/^\/([^/]+)\/([^/]+)\/?$/);
-      if (!boardMatch) continue;
-      const boardSlug = boardMatch[2];
-      // Skip known non-board paths
-      if (['pins', '_saved', '_created', 'followers', 'following', 'settings'].includes(boardSlug)) continue;
-
-      const url = `/${boardMatch[1]}/${boardSlug}/`;
-      if (seen.has(url)) continue;
-      seen.add(url);
-
-      const name = extractBoardNameFromCard(link) || decodeURIComponent(boardSlug).replace(/-/g, ' ');
-      const coverImg = link.querySelector('img');
-      const pinCountEl = link.closest('[data-test-id="board-card"], [data-test-id="board"]')
-        || link.parentElement?.parentElement;
-      const pinCount = extractPinCount(pinCountEl);
-
-      boards.push({
-        name,
-        url,
-        coverImage: coverImg?.src || null,
-        pinCount,
-      });
-    }
-  }
-
-  // Strategy 3: parse from __PWS_DATA__ or initial state scripts
+  // Strategy 2: parse from __PWS_DATA__ or initial state scripts
   if (boards.length === 0) {
     const scriptBoards = extractBoardsFromScripts();
     for (const b of scriptBoards) {
@@ -87,6 +270,53 @@ async function extractBoards() {
   }
 
   return { success: true, boards };
+}
+
+/** Fetch boards using Pinterest's internal API endpoint */
+async function fetchBoardsViaAPI(username) {
+  // Pinterest's internal API — the content script runs on pinterest.com
+  // so we have the user's cookies for authentication
+  const url = `https://www.pinterest.com/resource/BoardsResource/get/`;
+  const params = new URLSearchParams({
+    source_url: `/${username}/`,
+    data: JSON.stringify({
+      options: {
+        username,
+        page_size: 100,
+        privacy_filter: 'all',
+        sort: 'custom',
+        field_set_key: 'profile_grid_item',
+        filter_section_pins: true,
+        section_id: null,
+        project_id: null,
+      },
+      context: {},
+    }),
+    _: Date.now().toString(),
+  });
+
+  const resp = await fetch(`${url}?${params}`, {
+    headers: {
+      'Accept': 'application/json',
+      'X-Requested-With': 'XMLHttpRequest',
+    },
+    credentials: 'include',
+  });
+
+  if (!resp.ok) throw new Error(`API returned ${resp.status}`);
+
+  const data = await resp.json();
+  const items = data?.resource_response?.data || [];
+
+  return items.map(board => ({
+    name: board.name || 'Untitled Board',
+    url: board.url || `/${username}/${board.slug || board.id}/`,
+    coverImage: board.image_cover_url
+      || board.images?.['170x']?.url
+      || board.cover_images?.[0]?.url
+      || null,
+    pinCount: board.pin_count ?? null,
+  }));
 }
 
 function parseBoardCard(card) {
@@ -111,19 +341,52 @@ function parseBoardCard(card) {
   };
 }
 
-function extractBoardNameFromCard(link) {
-  // Look for explicit name elements near the link
-  const parent = link.closest('[data-test-id="board-card"], [data-test-id="board"]') || link.parentElement;
+function extractBoardNameFromCard(link, container) {
+  // Look for text elements near the link that could be the board name
+  const parent = container || link.parentElement;
   if (!parent) return null;
-  const nameEl = parent.querySelector('[data-test-id="board-name"], h3, h4');
-  return nameEl?.textContent?.trim() || null;
+
+  // Try common heading elements
+  const nameEl = parent.querySelector('h3, h4, h2')
+    || parent.querySelector('[data-test-id="board-name"]');
+  if (nameEl) return nameEl.textContent?.trim() || null;
+
+  // Look for text nodes in sibling elements (Pinterest often puts the name
+  // in a separate div from the cover image link)
+  const textEls = parent.querySelectorAll('div');
+  for (const el of textEls) {
+    const text = el.textContent?.trim();
+    // Board names: non-empty, not just a number, not too long
+    if (text && text.length > 1 && text.length < 100
+        && !text.match(/^\d+$/) && !text.includes('Pin')
+        && el.children.length === 0) {
+      return text;
+    }
+  }
+
+  return link.getAttribute('aria-label')?.trim() || null;
 }
 
 function extractPinCount(el) {
   if (!el) return null;
   const text = el.textContent || '';
-  const match = text.match(/(\d+)\s*(?:pins?|Pins?)/i);
-  return match ? parseInt(match[1], 10) : null;
+
+  // Try "3,642 Pins" or "3.642 Pins" (locale-dependent thousands separator)
+  const commaMatch = text.match(/([\d,\.]+)\s*(?:pins?|Pins?)/i);
+  if (commaMatch) {
+    // Strip commas/dots used as thousands separators (not decimal — pin counts are integers)
+    const raw = commaMatch[1].replace(/[,\.]/g, '');
+    const n = parseInt(raw, 10);
+    if (!isNaN(n)) return n;
+  }
+
+  // Try "1.2k Pins" or "12K pins"
+  const kMatch = text.match(/([\d.]+)\s*k\s*(?:pins?|Pins?)/i);
+  if (kMatch) {
+    return Math.round(parseFloat(kMatch[1]) * 1000);
+  }
+
+  return null;
 }
 
 function extractBoardsFromScripts() {
@@ -170,37 +433,42 @@ function findBoardsInObject(obj, depth = 0) {
   return results;
 }
 
+/** Extract the pin count shown on a board page header (more accurate than profile card) */
+function extractBoardPagePinCount() {
+  // Pinterest board pages show "N Pins" in the header area
+  const candidates = document.querySelectorAll('div, span, h2, h3');
+  for (const el of candidates) {
+    // Only check leaf-ish elements to avoid matching the whole page
+    if (el.children.length > 3) continue;
+    const text = el.textContent?.trim() || '';
+    // Match "3,642 Pins" or "1.2k Pins" — but NOT "3,642 Pins · 2w" (the whole header)
+    if (text.length > 50) continue;
+    const m = text.match(/^([\d,\.]+)\s*(?:pins?)/i) || text.match(/^([\d.]+)\s*k\s*(?:pins?)/i);
+    if (m) {
+      if (text.toLowerCase().includes('k')) {
+        return Math.round(parseFloat(m[1]) * 1000);
+      }
+      return parseInt(m[1].replace(/[,\.]/g, ''), 10);
+    }
+  }
+  return null;
+}
+
 // ── Pin extraction ────────────────────────────────────────
 
 async function extractPins(options = {}) {
-  const maxScrolls = options.maxScrolls ?? 50;
+  const maxScrolls = options.maxScrolls ?? 300;
 
   // Wait for initial pins
-  await waitForSelector(
-    '[data-test-id="pin"], [data-test-id="pinWrapper"], .pinWrapper, [class*="Pin"][class*="wrapper"], div[data-grid-item="true"]',
-    10000
-  );
+  await waitForSelector(PIN_SELECTORS, 10000);
 
   // Scroll to load all pins
   const totalLoaded = await scrollAndLoadMore(maxScrolls);
 
-  // Extract
+  // Extract — use the unified selector set
   const pins = [];
   const seenIds = new Set();
-
-  const selectors = [
-    '[data-test-id="pin"]',
-    '[data-test-id="pinWrapper"]',
-    '.pinWrapper',
-    '[class*="Pin"][class*="wrapper"]',
-    'div[data-grid-item="true"]',
-  ];
-
-  let pinElements = [];
-  for (const sel of selectors) {
-    pinElements = document.querySelectorAll(sel);
-    if (pinElements.length > 0) break;
-  }
+  const pinElements = document.querySelectorAll(PIN_SELECTORS);
 
   for (const [index, el] of [...pinElements].entries()) {
     try {
@@ -225,7 +493,10 @@ async function extractPins(options = {}) {
     }
   }
 
-  return { success: true, pins, scrolledPins: totalLoaded };
+  // Sample the board page's own pin count for verification
+  const boardPinCount = extractBoardPagePinCount();
+
+  return { success: true, pins, scrolledPins: totalLoaded, boardPinCount };
 }
 
 function extractPinData(element, index) {
@@ -255,6 +526,69 @@ function extractPinData(element, index) {
     image: upgradeImageUrl(imageUrl),
     thumbnail: imageUrl,
     url: `https://www.pinterest.com/pin/${pinId}/`,
+  };
+}
+
+// ── Diagnostic mode ───────────────────────────────────────
+
+async function diagnosePage() {
+  await new Promise(r => setTimeout(r, 2000)); // let page render
+
+  const url = window.location.href;
+  const title = document.title;
+
+  // Sample links
+  const allLinks = [...document.querySelectorAll('a[href]')];
+  const linkSamples = allLinks.slice(0, 100).map(a => ({
+    href: a.getAttribute('href'),
+    text: a.textContent?.trim().substring(0, 60),
+    hasImg: !!a.querySelector('img'),
+  }));
+
+  // Board-like selectors
+  const selectors = {
+    'data-test-id=board-card': document.querySelectorAll('[data-test-id="board-card"]').length,
+    'data-test-id=board': document.querySelectorAll('[data-test-id="board"]').length,
+    'data-test-id=pin': document.querySelectorAll('[data-test-id="pin"]').length,
+    'data-test-id=pinWrapper': document.querySelectorAll('[data-test-id="pinWrapper"]').length,
+    'class*=Board': document.querySelectorAll('[class*="Board"]').length,
+    'class*=board': document.querySelectorAll('[class*="board"]').length,
+    'role=list': document.querySelectorAll('[role="list"]').length,
+    'role=listitem': document.querySelectorAll('[role="listitem"]').length,
+    'role=main': document.querySelectorAll('[role="main"]').length,
+    'div[data-grid-item]': document.querySelectorAll('div[data-grid-item]').length,
+  };
+
+  // Data attributes in use
+  const dataTestIds = new Set();
+  document.querySelectorAll('[data-test-id]').forEach(el => {
+    dataTestIds.add(el.getAttribute('data-test-id'));
+  });
+
+  // Script data
+  const scripts = [...document.querySelectorAll('script')];
+  const hasResourceResponse = scripts.some(s => s.textContent.includes('resource_response'));
+  const hasPWSData = scripts.some(s => s.textContent.includes('__PWS_DATA__'));
+
+  // Board-pattern links (/{user}/{slug}/)
+  const boardPatternLinks = allLinks
+    .map(a => a.getAttribute('href'))
+    .filter(h => h && /^\/[^/]+\/[^/]+\/?$/.test(h) && !h.includes('/pin/'))
+    .slice(0, 30);
+
+  return {
+    success: true,
+    diagnostic: {
+      url,
+      title,
+      totalLinks: allLinks.length,
+      selectorCounts: selectors,
+      dataTestIds: [...dataTestIds].sort(),
+      boardPatternLinks,
+      hasResourceResponse,
+      hasPWSData,
+      linkSamples: linkSamples.filter(l => l.href && !l.href.startsWith('http') && !l.href.startsWith('#')).slice(0, 40),
+    },
   };
 }
 
@@ -304,28 +638,44 @@ function formatPinFromAPI(apiPin) {
 
 // ── Scroll + wait utilities ───────────────────────────────
 
-async function scrollAndLoadMore(maxScrolls = 50) {
+/** Selector set that matches pin containers across Pinterest DOM versions */
+const PIN_SELECTORS = [
+  'div[data-grid-item="true"]',
+  '[data-test-id="pin"]',
+  '[data-test-id="pinWrapper"]',
+  '.pinWrapper',
+].join(', ');
+
+function countPinElements() {
+  return document.querySelectorAll(PIN_SELECTORS).length;
+}
+
+async function scrollAndLoadMore(maxScrolls = 300) {
   let scrollCount = 0;
   let lastPinCount = 0;
   let sameCountIterations = 0;
 
   while (scrollCount < maxScrolls) {
     window.scrollTo(0, document.body.scrollHeight);
-    await waitForNewContent(1500);
+    await waitForNewContent(2000);
 
-    const currentPinCount = document.querySelectorAll(
-      '[data-test-id="pin"], [data-test-id="pinWrapper"], .pinWrapper'
-    ).length;
+    const currentPinCount = countPinElements();
 
     if (currentPinCount === lastPinCount) {
       sameCountIterations++;
-      if (sameCountIterations >= 3) break;
+      // Pinterest lazy-loads in batches — be patient before giving up
+      if (sameCountIterations >= 5) break;
     } else {
       sameCountIterations = 0;
     }
 
     lastPinCount = currentPinCount;
     scrollCount++;
+
+    // Log progress every 10 scrolls for visibility
+    if (scrollCount % 10 === 0) {
+      console.log(`[Pinterest Pin DL] Scroll ${scrollCount}: ${currentPinCount} pins loaded`);
+    }
   }
 
   window.scrollTo(0, 0);
@@ -349,21 +699,55 @@ function waitForNewContent(timeout) {
       const hasNew = mutations.some(m =>
         Array.from(m.addedNodes).some(node =>
           node.nodeType === 1 && (
-            node.matches?.('[data-test-id="pin"], [data-test-id="pinWrapper"], .pinWrapper') ||
-            node.querySelector?.('[data-test-id="pin"], [data-test-id="pinWrapper"], .pinWrapper')
+            node.matches?.(PIN_SELECTORS) ||
+            node.querySelector?.(PIN_SELECTORS) ||
+            // Also detect any added elements containing pin links
+            node.querySelector?.('a[href*="/pin/"]')
           )
         )
       );
       if (hasNew) {
         clearTimeout(timer);
-        timer = setTimeout(complete, 500);
+        // Give Pinterest a moment to finish rendering the batch
+        timer = setTimeout(complete, 600);
       }
     });
 
-    const container = document.querySelector('[data-test-id="user-pins-container"]')
-      || document.querySelector('[role="main"]')
+    const container = document.querySelector('[role="main"]')
       || document.body;
     observer.observe(container, { childList: true, subtree: true });
+  });
+}
+
+/** Wait for board content to appear in the client-rendered DOM */
+function waitForBoardContent(username, timeout = 15000) {
+  return new Promise(resolve => {
+    const start = Date.now();
+    const check = () => {
+      // Look for links matching /{username}/{slug}/ pattern
+      const links = document.querySelectorAll('a[href]');
+      let boardLinkCount = 0;
+      for (const link of links) {
+        const href = link.getAttribute('href');
+        if (!href) continue;
+        const m = href.match(/^\/([^/]+)\/([^/]+)\/?$/);
+        if (!m) continue;
+        if (username && m[1] !== username) continue;
+        const slug = m[2];
+        if (['pins', '_saved', '_created', '_drafts', 'followers', 'following', 'settings', 'topics', 'ideas', 'tried'].includes(slug)) continue;
+        boardLinkCount++;
+      }
+
+      if (boardLinkCount > 0) {
+        // Found board links — wait a bit more for images to load
+        setTimeout(resolve, 1000);
+      } else if (Date.now() - start > timeout) {
+        resolve(); // timeout — proceed with whatever we have
+      } else {
+        setTimeout(check, 500);
+      }
+    };
+    check();
   });
 }
 

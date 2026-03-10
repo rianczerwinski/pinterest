@@ -7,13 +7,26 @@ chrome.action.onClicked.addListener(() => {
   });
 });
 
-// Listen for download requests
+// Listen for messages
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'downloadImage') {
     downloadImage(message.url, message.filename, message.pinId)
       .then(result => sendResponse(result))
       .catch(error => sendResponse({ success: false, error: error.message }));
-    return true; // Keep channel open for async response
+    return true;
+  }
+
+  // Relay overlay control messages from content script → popup tab
+  if (message.action?.startsWith('overlay-')) {
+    // Find the popup tab (it's our own extension page)
+    chrome.tabs.query({}, tabs => {
+      const popupTab = tabs.find(t => t.url?.includes(chrome.runtime.id));
+      if (popupTab) {
+        chrome.tabs.sendMessage(popupTab.id, message);
+      }
+    });
+    sendResponse({ success: true });
+    return false;
   }
 });
 
