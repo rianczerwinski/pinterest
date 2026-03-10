@@ -236,6 +236,9 @@ async function extractBoards() {
   // Also wait for cover images which use elementtiming="cover-image"
   await waitForBoardContent(username, 15000);
 
+  // Scroll down to load all boards — Pinterest lazy-loads them on the profile page
+  await scrollToLoadAllBoards(username);
+
   const boards = [];
   const seen = new Set();
   const skipSlugs = new Set([
@@ -293,6 +296,9 @@ async function extractBoards() {
       }
     }
   }
+
+  console.log(`[Pinterest Pin DL] extractBoards: found ${boards.length} boards:`,
+    boards.map(b => `${b.name} (${b.url}, ${b.pinCount ?? '?'} pins)`));
 
   return { success: true, boards };
 }
@@ -750,6 +756,51 @@ function waitForNewContent(timeout) {
       || document.body;
     observer.observe(container, { childList: true, subtree: true });
   });
+}
+
+/** Scroll the profile page to load all boards (Pinterest lazy-loads them) */
+async function scrollToLoadAllBoards(username) {
+  const skipSlugs = new Set([
+    'pins', '_saved', '_created', '_drafts', 'followers', 'following',
+    'settings', 'topics', 'ideas', 'tried'
+  ]);
+
+  function countBoardLinks() {
+    let count = 0;
+    for (const link of document.querySelectorAll('a[href]')) {
+      const href = link.getAttribute('href');
+      if (!href) continue;
+      const m = href.match(/^\/([^/]+)\/([^/]+)\/?$/);
+      if (!m) continue;
+      if (username && m[1] !== username) continue;
+      if (skipSlugs.has(m[2])) continue;
+      count++;
+    }
+    return count;
+  }
+
+  let lastCount = countBoardLinks();
+  let stableIterations = 0;
+  const maxScrolls = 30; // boards are fewer than pins — 30 scrolls is plenty
+
+  for (let i = 0; i < maxScrolls; i++) {
+    window.scrollTo(0, document.body.scrollHeight);
+    await new Promise(r => setTimeout(r, 1200));
+
+    const current = countBoardLinks();
+    if (current === lastCount) {
+      stableIterations++;
+      if (stableIterations >= 3) break;
+    } else {
+      stableIterations = 0;
+      console.log(`[Pinterest Pin DL] Board scroll ${i + 1}: ${current} board links found`);
+    }
+    lastCount = current;
+  }
+
+  window.scrollTo(0, 0);
+  await new Promise(r => setTimeout(r, 500));
+  console.log(`[Pinterest Pin DL] Board loading complete: ${lastCount} board links found`);
 }
 
 /** Wait for board content to appear in the client-rendered DOM */

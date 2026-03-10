@@ -83,46 +83,64 @@ function initEventListeners() {
 }
 
 // ── Tab management ────────────────────────────────────────
-
-async function findPinterestTabs() {
-  return chrome.tabs.query({ url: ['https://*.pinterest.com/*', 'https://pinterest.com/*'] });
-}
+// The extension creates and owns a dedicated Pinterest tab. It doesn't hijack
+// existing tabs — it opens a new one and tracks it by ID.
 
 async function refreshTabStatus() {
-  const tabs = await findPinterestTabs();
   const dot = el('tabStatusDot');
   const text = el('tabStatusText');
   const openBtn = el('openPinterestBtn');
 
-  if (tabs.length === 0) {
-    dot.className = 'status-dot red';
-    text.textContent = 'No Pinterest tab';
-    openBtn.style.display = '';
+  // Check if our tracked tab still exists
+  if (selectedPinterestTab) {
+    try {
+      const tab = await chrome.tabs.get(selectedPinterestTab.id);
+      if (tab?.url?.includes('pinterest.com')) {
+        dot.className = 'status-dot green';
+        text.textContent = `Connected: Tab ${tab.id} — ${tab.title?.substring(0, 30) || tab.url}`;
+        openBtn.style.display = 'none';
+        return;
+      }
+    } catch { /* tab was closed */ }
     selectedPinterestTab = null;
-  } else {
-    selectedPinterestTab = tabs[0];
-    dot.className = 'status-dot green';
-    text.textContent = `Connected: ${tabs[0].title?.substring(0, 40) || tabs[0].url}`;
-    openBtn.style.display = 'none';
   }
+
+  dot.className = 'status-dot red';
+  text.textContent = 'No connected tab';
+  openBtn.style.display = '';
 }
 
+/** Open a new Pinterest tab and mark it as the connected tab */
 function openPinterest() {
-  chrome.tabs.create({ url: 'https://www.pinterest.com', active: false }, () => {
+  chrome.tabs.create({ url: 'https://www.pinterest.com', active: false }, (tab) => {
+    selectedPinterestTab = tab;
     setTimeout(refreshTabStatus, 2000);
   });
 }
 
 async function getTab() {
+  // Verify our tracked tab is still alive
   if (selectedPinterestTab) {
     try {
       const tab = await chrome.tabs.get(selectedPinterestTab.id);
       if (tab?.url?.includes('pinterest.com')) return tab;
     } catch { /* tab closed */ }
   }
-  await refreshTabStatus();
-  if (!selectedPinterestTab) throw new Error('No Pinterest tab. Open Pinterest first.');
-  return selectedPinterestTab;
+  // No valid tab — open one
+  return new Promise((resolve) => {
+    chrome.tabs.create({ url: 'https://www.pinterest.com', active: false }, (tab) => {
+      selectedPinterestTab = tab;
+      refreshTabStatus();
+      // Wait for it to load
+      const listener = (id, info) => {
+        if (id === tab.id && info.status === 'complete') {
+          chrome.tabs.onUpdated.removeListener(listener);
+          setTimeout(() => resolve(tab), 1500);
+        }
+      };
+      chrome.tabs.onUpdated.addListener(listener);
+    });
+  });
 }
 
 // ── Navigation + extraction ───────────────────────────────
