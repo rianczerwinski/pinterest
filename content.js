@@ -493,25 +493,35 @@ async function extractPins(options = {}) {
   // Wait for initial pins
   await waitForSelector(PIN_SELECTORS, 10000);
 
-  // Scroll to load all pins
-  const totalLoaded = await scrollAndLoadMore(maxScrolls);
-
-  // Extract — use the unified selector set
-  const pins = [];
+  // Collect pins incrementally while scrolling — Pinterest virtualizes its grid,
+  // so pins scrolled past get removed from the DOM. We must harvest each batch
+  // before scrolling further.
   const seenIds = new Set();
-  const pinElements = document.querySelectorAll(PIN_SELECTORS);
+  const pins = [];
 
-  for (const [index, el] of [...pinElements].entries()) {
-    try {
-      const pin = extractPinData(el, index);
-      if (pin && pin.id && !seenIds.has(pin.id)) {
-        seenIds.add(pin.id);
-        pins.push(pin);
+  function harvestCurrentPins() {
+    const pinElements = document.querySelectorAll(PIN_SELECTORS);
+    for (const [index, el] of [...pinElements].entries()) {
+      try {
+        const pin = extractPinData(el, index);
+        if (pin && pin.id && !seenIds.has(pin.id)) {
+          seenIds.add(pin.id);
+          pins.push(pin);
+        }
+      } catch (err) {
+        console.warn('Pin extraction failed for element:', err);
       }
-    } catch (err) {
-      console.warn('Pin extraction failed for element:', err);
     }
   }
+
+  // Harvest initial batch
+  harvestCurrentPins();
+
+  // Scroll and harvest incrementally
+  await scrollAndLoadMore(maxScrolls, harvestCurrentPins);
+
+  // Final harvest after scroll completes
+  harvestCurrentPins();
 
   // Fallback: parse from page scripts
   if (pins.length === 0) {
@@ -527,7 +537,8 @@ async function extractPins(options = {}) {
   // Sample the board page's own pin count for verification
   const boardPinCount = extractBoardPagePinCount();
 
-  return { success: true, pins, scrolledPins: totalLoaded, boardPinCount };
+  console.log(`[Pinterest Pin DL] extractPins: ${pins.length} unique pins collected (${seenIds.size} seen)`);
+  return { success: true, pins, scrolledPins: pins.length, boardPinCount };
 }
 
 function extractPinData(element, index) {
@@ -681,7 +692,7 @@ function countPinElements() {
   return document.querySelectorAll(PIN_SELECTORS).length;
 }
 
-async function scrollAndLoadMore(maxScrolls = 300) {
+async function scrollAndLoadMore(maxScrolls = 300, onNewContent = null) {
   let scrollCount = 0;
   let lastPinCount = 0;
   let sameCountIterations = 0;
@@ -692,6 +703,9 @@ async function scrollAndLoadMore(maxScrolls = 300) {
 
     window.scrollTo(0, document.body.scrollHeight);
     await waitForNewContent(2000);
+
+    // Harvest pins before they get virtualized away
+    if (onNewContent) onNewContent();
 
     const currentPinCount = countPinElements();
 
