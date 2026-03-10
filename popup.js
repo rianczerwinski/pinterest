@@ -1,637 +1,443 @@
-// State management
-let pinsData = {
-  pins: [],
-  boards: {},
-  lastFetch: null,
-  username: ''
-};
+// ── Archive state ─────────────────────────────────────────
+// v2 archive: pins keyed by ID, boards under profiles, download checkpoints.
 
-let currentGrouping = 'all';
-let autosaveEnabled = true;
-let autosaveTimeout = null;
+const ARCHIVE_VERSION = 2;
 
-// Download settings with anti-bot protection
+let archive = emptyArchive();
+let currentProfile = '';
+let boardSelections = {}; // boardName → boolean
+let newPinIds = new Set(); // populated after diff
+let selectedPinterestTab = null;
+
 let downloadSettings = {
   minDelay: 2000,
   maxDelay: 5000,
   batchSize: 5,
   batchDelay: 10000,
   maxRetries: 3,
-  exponentialBackoff: true
+  exponentialBackoff: true,
 };
 
-// Download state
 let downloadState = {
   isDownloading: false,
   currentBatch: 0,
   totalBatches: 0,
   completed: 0,
   failed: 0,
-  total: 0
+  total: 0,
 };
 
-// Pinterest tab management
-let selectedPinterestTab = null;
+function emptyArchive() {
+  return { version: ARCHIVE_VERSION, profiles: {}, pins: {}, downloads: null };
+}
+
+// ── Initialization ────────────────────────────────────────
+
+document.addEventListener('DOMContentLoaded', () => {
+  loadState().then(() => {
+    initEventListeners();
+    refreshTabStatus();
+    renderAll();
+  });
+});
+
+function initEventListeners() {
+  // Profile
+  el('loadProfileBtn').addEventListener('click', loadProfile);
+  el('refreshTabsBtn').addEventListener('click', refreshTabStatus);
+  el('openPinterestBtn').addEventListener('click', openPinterest);
+
+  // Boards
+  el('selectAllBoardsBtn').addEventListener('click', () => setBoardSelections(true));
+  el('deselectAllBoardsBtn').addEventListener('click', () => setBoardSelections(false));
+  el('loadSelectedBoardsBtn').addEventListener('click', loadSelectedBoards);
+
+  // Diff
+  el('selectNewPinsBtn').addEventListener('click', selectNewPins);
+  el('dismissDiffBtn').addEventListener('click', () => { el('diffSection').style.display = 'none'; });
+
+  // Pins
+  el('selectAllPinsBtn').addEventListener('click', () => setAllPinSelections(true));
+  el('deselectAllPinsBtn').addEventListener('click', () => setAllPinSelections(false));
+  el('downloadSelectedBtn').addEventListener('click', downloadSelected);
+  el('searchInput').addEventListener('input', debounce(renderPins, 300));
+  el('filterSelect').addEventListener('change', renderPins);
+
+  // Resume
+  el('resumeBtn').addEventListener('click', resumeDownload);
+  el('clearResumeBtn').addEventListener('click', clearResume);
+
+  // Export/Import
+  el('exportBtn').addEventListener('click', exportArchive);
+  el('importBtn').addEventListener('click', () => el('importFile').click());
+  el('importFile').addEventListener('change', importArchive);
+
+  // Settings
+  for (const id of ['minDelay', 'maxDelay', 'batchSize', 'batchDelay', 'maxRetries', 'exponentialBackoff']) {
+    el(id).addEventListener('change', updateSettings);
+  }
+}
+
+// ── Tab management ────────────────────────────────────────
 
 async function findPinterestTabs() {
-  // Query ALL tabs with pinterest.com in URL
-  const tabs = await chrome.tabs.query({
-    url: ['https://*.pinterest.com/*', 'https://pinterest.com/*']
-  });
-  return tabs;
+  return chrome.tabs.query({ url: ['https://*.pinterest.com/*', 'https://pinterest.com/*'] });
 }
 
-async function selectPinterestTab() {
+async function refreshTabStatus() {
   const tabs = await findPinterestTabs();
+  const dot = el('tabStatusDot');
+  const text = el('tabStatusText');
+  const openBtn = el('openPinterestBtn');
 
   if (tabs.length === 0) {
-    return {
-      success: false,
-      error: 'No Pinterest tabs found',
-      action: 'open_pinterest'
-    };
-  }
-
-  if (tabs.length === 1) {
-    // Automatically use the only Pinterest tab
+    dot.className = 'status-dot red';
+    text.textContent = 'No Pinterest tab';
+    openBtn.style.display = '';
+    selectedPinterestTab = null;
+  } else {
     selectedPinterestTab = tabs[0];
-    return {
-      success: true,
-      tab: tabs[0],
-      message: 'Pinterest tab detected'
-    };
+    dot.className = 'status-dot green';
+    text.textContent = `Connected: ${tabs[0].title?.substring(0, 40) || tabs[0].url}`;
+    openBtn.style.display = 'none';
   }
-
-  // Multiple tabs - need user selection
-  return {
-    success: false,
-    error: 'Multiple Pinterest tabs found',
-    action: 'select_tab',
-    tabs: tabs
-  };
-}
-
-async function getActivePinterestTab() {
-  // If we have a selected tab and it's still valid, use it
-  if (selectedPinterestTab) {
-    try {
-      const tab = await chrome.tabs.get(selectedPinterestTab.id);
-      if (tab && tab.url.includes('pinterest.com')) {
-        return tab;
-      }
-    } catch (e) {
-      // Tab was closed, clear selection
-      selectedPinterestTab = null;
-    }
-  }
-
-  // Otherwise, run selection logic
-  const result = await selectPinterestTab();
-  if (result.success) {
-    return result.tab;
-  }
-
-  throw new Error(result.error);
-}
-
-function showPinterestTabSelector() {
-  findPinterestTabs().then(tabs => {
-    const selector = document.getElementById('tabSelector');
-    const openBtn = document.getElementById('openPinterestBtn');
-
-    if (tabs.length === 0) {
-      selector.style.display = 'none';
-      openBtn.style.display = 'block';
-      updateTabStatus('none', 'No Pinterest tabs found');
-      return;
-    }
-
-    if (tabs.length === 1) {
-      selectedPinterestTab = tabs[0];
-      selector.style.display = 'none';
-      openBtn.style.display = 'none';
-      updateTabStatus('connected', `Connected to: ${getTabTitle(tabs[0])}`);
-      return;
-    }
-
-    // Multiple tabs - show selector
-    selector.innerHTML = tabs.map(tab => `
-      <div class="tab-option" data-tab-id="${tab.id}">
-        <input type="radio" name="pinterest-tab" value="${tab.id}" id="tab-${tab.id}">
-        <label for="tab-${tab.id}">
-          <img src="${tab.favIconUrl || 'icons/icon16.png'}" width="16" height="16">
-          ${getTabTitle(tab)}
-        </label>
-      </div>
-    `).join('');
-    selector.style.display = 'block';
-    updateTabStatus('multiple', `${tabs.length} Pinterest tabs found - select one`);
-
-    // Add event listeners for radio buttons
-    selector.querySelectorAll('input[type="radio"]').forEach(radio => {
-      radio.addEventListener('change', (e) => {
-        const tabId = parseInt(e.target.value);
-        selectedPinterestTab = tabs.find(t => t.id === tabId);
-        updateTabStatus('connected', `Connected to: ${getTabTitle(selectedPinterestTab)}`);
-      });
-    });
-  });
-}
-
-function getTabTitle(tab) {
-  if (!tab.title || tab.title.trim() === '') {
-    return tab.url.substring(0, 50) + '...';
-  }
-  return tab.title.substring(0, 40) + (tab.title.length > 40 ? '...' : '');
-}
-
-function updateTabStatus(status, text) {
-  const indicator = document.getElementById('tabStatusIndicator');
-  const statusText = document.getElementById('tabStatusText');
-
-  statusText.textContent = text;
-
-  // Color coding
-  const colors = {
-    'connected': '#00a400',  // green
-    'none': '#e60023',       // red
-    'multiple': '#ffa500',   // orange
-    'checking': '#666'       // gray
-  };
-
-  indicator.style.color = colors[status] || colors['checking'];
-}
-
-function refreshPinterestTabs() {
-  updateTabStatus('checking', 'Checking for Pinterest tabs...');
-  showPinterestTabSelector();
 }
 
 function openPinterest() {
-  chrome.tabs.create({
-    url: 'https://www.pinterest.com',
-    active: false  // Don't switch to it
-  }, (newTab) => {
-    // Wait a bit for the page to load, then refresh
-    setTimeout(() => {
-      refreshPinterestTabs();
-    }, 2000);
+  chrome.tabs.create({ url: 'https://www.pinterest.com', active: false }, () => {
+    setTimeout(refreshTabStatus, 2000);
   });
 }
 
-// Initialize on load
-document.addEventListener('DOMContentLoaded', () => {
-  loadState();
-  initializeEventListeners();
-  renderPins();
-  updateStats();
-  refreshPinterestTabs(); // Check for Pinterest tabs on load
-});
+async function getTab() {
+  if (selectedPinterestTab) {
+    try {
+      const tab = await chrome.tabs.get(selectedPinterestTab.id);
+      if (tab?.url?.includes('pinterest.com')) return tab;
+    } catch { /* tab closed */ }
+  }
+  await refreshTabStatus();
+  if (!selectedPinterestTab) throw new Error('No Pinterest tab. Open Pinterest first.');
+  return selectedPinterestTab;
+}
 
-// Event listeners
-function initializeEventListeners() {
-  // Fetch buttons
-  document.getElementById('fetchAllBtn').addEventListener('click', fetchAllPins);
-  document.getElementById('fetchByBoardBtn').addEventListener('click', fetchByBoards);
+// ── Navigation + extraction ───────────────────────────────
 
-  // Grouping options
-  document.querySelectorAll('input[name="grouping"]').forEach(radio => {
-    radio.addEventListener('change', (e) => {
-      currentGrouping = e.target.value;
-      renderPins();
+async function navigateAndExtract(tabId, url, mode, options = {}) {
+  await chrome.tabs.update(tabId, { url });
+  await waitForTabLoad(tabId);
+  return new Promise((resolve, reject) => {
+    chrome.tabs.sendMessage(tabId, { action: 'extract', mode, options }, response => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+      } else if (!response) {
+        reject(new Error('No response from content script'));
+      } else {
+        resolve(response);
+      }
     });
   });
-
-  // Save/Export/Import buttons
-  document.getElementById('manualSaveBtn').addEventListener('click', manualSave);
-  document.getElementById('exportBtn').addEventListener('click', exportData);
-  document.getElementById('importBtn').addEventListener('click', () => {
-    document.getElementById('importFile').click();
-  });
-  document.getElementById('importFile').addEventListener('change', importData);
-
-  // Download controls
-  document.getElementById('downloadSelectedBtn').addEventListener('click', downloadSelected);
-  document.getElementById('selectAllBtn').addEventListener('click', selectAll);
-  document.getElementById('deselectAllBtn').addEventListener('click', deselectAll);
-
-  // Settings inputs
-  document.getElementById('minDelay').addEventListener('change', updateSettings);
-  document.getElementById('maxDelay').addEventListener('change', updateSettings);
-  document.getElementById('batchSize').addEventListener('change', updateSettings);
-  document.getElementById('batchDelay').addEventListener('change', updateSettings);
-  document.getElementById('maxRetries').addEventListener('change', updateSettings);
-  document.getElementById('exponentialBackoff').addEventListener('change', updateSettings);
-
-  // Pinterest tab management
-  document.getElementById('refreshTabsBtn').addEventListener('click', refreshPinterestTabs);
-  document.getElementById('openPinterestBtn').addEventListener('click', openPinterest);
-
-  // Search
-  document.getElementById('searchInput').addEventListener('input', debounce(handleSearch, 300));
 }
 
-// Fetch all pins from Pinterest
-async function fetchAllPins() {
-  const username = document.getElementById('usernameInput').value.trim();
-  if (!username) {
-    showStatus('Please enter a Pinterest username', 'error');
-    return;
-  }
+function waitForTabLoad(tabId) {
+  return new Promise(resolve => {
+    const listener = (id, info) => {
+      if (id === tabId && info.status === 'complete') {
+        chrome.tabs.onUpdated.removeListener(listener);
+        // Extra delay for Pinterest's client-side rendering
+        setTimeout(resolve, 2000);
+      }
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+  });
+}
 
-  showStatus('Fetching pins... This may take a while', 'info');
-  document.getElementById('fetchAllBtn').disabled = true;
+// ── Profile + board loading ───────────────────────────────
+
+async function loadProfile() {
+  const username = el('usernameInput').value.trim();
+  if (!username) { showStatus('Enter a username', 'error'); return; }
+
+  currentProfile = username;
+  showStatus('Loading boards...', 'info');
+  el('loadProfileBtn').disabled = true;
 
   try {
-    // Get Pinterest tab using new detection logic
-    let tab;
-    try {
-      tab = await getActivePinterestTab();
-    } catch (error) {
-      showStatus(error.message + '. Please open Pinterest in another tab.', 'error');
-      showPinterestTabSelector();
-      document.getElementById('fetchAllBtn').disabled = false;
+    const tab = await getTab();
+    const result = await navigateAndExtract(tab.id, `https://www.pinterest.com/${username}/`, 'boards');
+
+    if (!result.success || !result.boards?.length) {
+      showStatus('No boards found. The profile may be private or empty.', 'warning');
+      el('loadProfileBtn').disabled = false;
       return;
     }
 
-    chrome.tabs.sendMessage(tab.id, {
-      action: 'fetchPins',
-      username: username,
-      mode: 'all'
-    }, (response) => {
-      if (chrome.runtime.lastError) {
-        showStatus('Error: ' + chrome.runtime.lastError.message, 'error');
-        document.getElementById('fetchAllBtn').disabled = false;
-        return;
-      }
+    // Store board metadata in archive
+    if (!archive.profiles[username]) {
+      archive.profiles[username] = { lastFetched: null, boards: {} };
+    }
 
-      if (response && response.success) {
-        processFetchedPins(response.pins, username);
-        const scrollInfo = response.scrolledPins ? ` (loaded ${response.scrolledPins} via scrolling)` : '';
-        showStatus(`Successfully fetched ${response.pins.length} pins${scrollInfo}!`, 'success');
-      } else if (response && response.needsRetry) {
-        showStatus(response.error, 'warning');
-      } else {
-        showStatus('Failed to fetch pins. ' + (response?.error || 'Try again.'), 'error');
-      }
-      document.getElementById('fetchAllBtn').disabled = false;
-    });
-  } catch (error) {
-    showStatus('Error: ' + error.message, 'error');
-    document.getElementById('fetchAllBtn').disabled = false;
+    const profile = archive.profiles[username];
+    for (const board of result.boards) {
+      const existing = profile.boards[board.name];
+      profile.boards[board.name] = {
+        url: board.url,
+        coverImage: board.coverImage,
+        pinCount: board.pinCount,
+        lastFetched: existing?.lastFetched || null,
+        pins: existing?.pins || [],
+      };
+    }
+    profile.lastFetched = new Date().toISOString();
+
+    // Initialize board selections
+    boardSelections = {};
+    for (const b of result.boards) boardSelections[b.name] = true;
+
+    saveState();
+    renderBoards();
+    showStatus(`Found ${result.boards.length} boards`, 'success');
+  } catch (err) {
+    showStatus(`Error: ${err.message}`, 'error');
   }
+
+  el('loadProfileBtn').disabled = false;
 }
 
-// Fetch pins by boards
-async function fetchByBoards() {
-  const username = document.getElementById('usernameInput').value.trim();
-  if (!username) {
-    showStatus('Please enter a Pinterest username', 'error');
-    return;
-  }
+async function loadSelectedBoards() {
+  const username = currentProfile;
+  if (!username || !archive.profiles[username]) return;
 
-  showStatus('Fetching pins by boards... This may take a while', 'info');
-  document.getElementById('fetchByBoardBtn').disabled = true;
+  const profile = archive.profiles[username];
+  const selectedBoards = Object.entries(boardSelections)
+    .filter(([, selected]) => selected)
+    .map(([name]) => name);
+
+  if (selectedBoards.length === 0) { showStatus('No boards selected', 'error'); return; }
+
+  el('loadSelectedBoardsBtn').disabled = true;
+  showStatus(`Loading pins from ${selectedBoards.length} boards...`, 'info');
+
+  const previousPinIds = new Set(Object.keys(archive.pins).filter(id => archive.pins[id].profile === username));
+  let totalNew = 0;
+  let totalPins = 0;
 
   try {
-    // Get Pinterest tab using new detection logic
-    let tab;
-    try {
-      tab = await getActivePinterestTab();
-    } catch (error) {
-      showStatus(error.message + '. Please open Pinterest in another tab.', 'error');
-      showPinterestTabSelector();
-      document.getElementById('fetchByBoardBtn').disabled = false;
-      return;
+    const tab = await getTab();
+
+    for (let i = 0; i < selectedBoards.length; i++) {
+      const boardName = selectedBoards[i];
+      const boardMeta = profile.boards[boardName];
+      if (!boardMeta?.url) continue;
+
+      showStatus(`Loading board ${i + 1}/${selectedBoards.length}: ${boardName}...`, 'info');
+
+      const result = await navigateAndExtract(
+        tab.id,
+        `https://www.pinterest.com${boardMeta.url}`,
+        'pins'
+      );
+
+      if (!result.success || !result.pins?.length) continue;
+
+      const boardPinIds = [];
+      for (const pin of result.pins) {
+        boardPinIds.push(pin.id);
+        totalPins++;
+
+        const existing = archive.pins[pin.id];
+        if (existing) {
+          // Update lastSeen, preserve download state
+          existing.lastSeen = new Date().toISOString();
+          existing.title = pin.title || existing.title;
+          existing.image = pin.image || existing.image;
+          existing.thumbnail = pin.thumbnail || existing.thumbnail;
+        } else {
+          // New pin
+          archive.pins[pin.id] = {
+            ...pin,
+            board: boardName,
+            profile: username,
+            firstSeen: new Date().toISOString(),
+            lastSeen: new Date().toISOString(),
+            downloaded: false,
+            downloadPath: null,
+            downloadedAt: null,
+            selected: false,
+          };
+          totalNew++;
+        }
+      }
+
+      boardMeta.pins = boardPinIds;
+      boardMeta.lastFetched = new Date().toISOString();
     }
 
-    chrome.tabs.sendMessage(tab.id, {
-      action: 'fetchPins',
-      username: username,
-      mode: 'boards'
-    }, (response) => {
-      if (chrome.runtime.lastError) {
-        showStatus('Error: ' + chrome.runtime.lastError.message, 'error');
-        document.getElementById('fetchByBoardBtn').disabled = false;
-        return;
-      }
+    saveState();
 
-      if (response && response.success) {
-        processFetchedPins(response.pins, username, response.boards);
-        const scrollInfo = response.scrolledPins ? ` (loaded ${response.scrolledPins} via scrolling)` : '';
-        showStatus(`Successfully fetched ${response.pins.length} pins from ${Object.keys(response.boards).length} boards${scrollInfo}!`, 'success');
-      } else if (response && response.needsRetry) {
-        showStatus(response.error, 'warning');
-      } else {
-        showStatus('Failed to fetch pins. ' + (response?.error || 'Try again.'), 'error');
+    // Compute diff
+    newPinIds = new Set();
+    for (const id of Object.keys(archive.pins)) {
+      if (archive.pins[id].profile === username && !previousPinIds.has(id)) {
+        newPinIds.add(id);
       }
-      document.getElementById('fetchByBoardBtn').disabled = false;
-    });
-  } catch (error) {
-    showStatus('Error: ' + error.message, 'error');
-    document.getElementById('fetchByBoardBtn').disabled = false;
+    }
+
+    if (newPinIds.size > 0) {
+      showDiff(newPinIds.size, totalPins);
+    }
+
+    renderPins();
+    showStatus(`Loaded ${totalPins} pins (${totalNew} new) from ${selectedBoards.length} boards`, 'success');
+  } catch (err) {
+    showStatus(`Error: ${err.message}`, 'error');
   }
+
+  el('loadSelectedBoardsBtn').disabled = false;
 }
 
-// Process fetched pins
-function processFetchedPins(pins, username, boards = {}) {
-  pinsData.username = username;
-  pinsData.lastFetch = new Date().toISOString();
+// ── Diff ──────────────────────────────────────────────────
 
-  // Merge new pins with existing, preserving download status
-  const existingPinsMap = new Map(pinsData.pins.map(p => [p.id, p]));
+function showDiff(newCount, totalCount) {
+  el('diffSection').style.display = '';
+  el('diffSummary').textContent = `${newCount} new pins found (of ${totalCount} total)`;
+}
 
-  pins.forEach(pin => {
-    const existing = existingPinsMap.get(pin.id);
-    if (existing) {
-      // Preserve download status
-      pin.downloaded = existing.downloaded || false;
-      pin.downloadPath = existing.downloadPath || null;
-      pin.selected = existing.selected || false;
-    } else {
-      pin.downloaded = false;
-      pin.downloadPath = null;
-      pin.selected = false;
-    }
-  });
-
-  pinsData.pins = pins;
-
-  if (Object.keys(boards).length > 0) {
-    pinsData.boards = boards;
-  } else {
-    // Group pins by board if not already grouped
-    pinsData.boards = {};
-    pins.forEach(pin => {
-      const boardName = pin.board || 'Uncategorized';
-      if (!pinsData.boards[boardName]) {
-        pinsData.boards[boardName] = [];
-      }
-      pinsData.boards[boardName].push(pin.id);
-    });
+function selectNewPins() {
+  for (const id of newPinIds) {
+    if (archive.pins[id]) archive.pins[id].selected = true;
   }
-
-  triggerAutosave();
+  saveState();
   renderPins();
-  updateStats();
+  el('diffSection').style.display = 'none';
 }
 
-// Render pins in the UI
-function renderPins() {
-  const pinsList = document.getElementById('pinsList');
-  const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+// ── Download ──────────────────────────────────────────────
 
-  let filteredPins = pinsData.pins;
-  if (searchTerm) {
-    filteredPins = pinsData.pins.filter(pin =>
-      (pin.title && pin.title.toLowerCase().includes(searchTerm)) ||
-      (pin.description && pin.description.toLowerCase().includes(searchTerm)) ||
-      (pin.board && pin.board.toLowerCase().includes(searchTerm))
-    );
-  }
-
-  if (filteredPins.length === 0) {
-    pinsList.innerHTML = `
-      <div class="empty-state">
-        <h3>No Pins Found</h3>
-        <p>Enter a Pinterest username and click "Fetch Pins" to get started.</p>
-      </div>
-    `;
-    return;
-  }
-
-  if (currentGrouping === 'boards') {
-    renderByBoards(filteredPins, pinsList);
-  } else {
-    renderAllPins(filteredPins, pinsList);
-  }
-}
-
-// Render all pins in a single list
-function renderAllPins(pins, container) {
-  container.innerHTML = pins.map(pin => createPinHTML(pin)).join('');
-  attachPinEventListeners();
-}
-
-// Render pins grouped by boards
-function renderByBoards(pins, container) {
-  const boardGroups = {};
-
-  pins.forEach(pin => {
-    const boardName = pin.board || 'Uncategorized';
-    if (!boardGroups[boardName]) {
-      boardGroups[boardName] = [];
-    }
-    boardGroups[boardName].push(pin);
-  });
-
-  const html = Object.entries(boardGroups).map(([boardName, boardPins]) => {
-    const downloaded = boardPins.filter(p => p.downloaded).length;
-    const selected = boardPins.filter(p => p.selected).length;
-
-    return `
-      <div class="board-group">
-        <div class="board-header">
-          <h3 class="board-title">${escapeHtml(boardName)}</h3>
-          <div class="board-stats">
-            ${boardPins.length} pins | ${selected} selected | ${downloaded} downloaded
-          </div>
-        </div>
-        ${boardPins.map(pin => createPinHTML(pin)).join('')}
-      </div>
-    `;
-  }).join('');
-
-  container.innerHTML = html;
-  attachPinEventListeners();
-}
-
-// Create HTML for a single pin
-function createPinHTML(pin) {
-  const statusClass = pin.downloaded ? 'completed' : 'pending';
-  const statusText = pin.downloaded ? 'Downloaded' : 'Pending';
-  const downloadedClass = pin.downloaded ? 'downloaded' : '';
-
-  return `
-    <div class="pin-item ${downloadedClass}" data-pin-id="${pin.id}">
-      <input type="checkbox" class="pin-checkbox" ${pin.selected ? 'checked' : ''}>
-      <img src="${pin.thumbnail || pin.image}" alt="${escapeHtml(pin.title || 'Pin')}" class="pin-thumbnail" onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%22100%22%3E%3Crect fill=%22%23ddd%22 width=%22100%22 height=%22100%22/%3E%3Ctext fill=%22%23999%22 x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 dy=%22.3em%22%3ENo Image%3C/text%3E%3C/svg%3E'">
-      <div class="pin-info">
-        <div class="pin-title">${escapeHtml(pin.title || 'Untitled Pin')}</div>
-        <div class="pin-url">${escapeHtml(pin.url)}</div>
-      </div>
-      <div class="pin-status">
-        <span class="status-badge ${statusClass}">${statusText}</span>
-        <div class="pin-actions">
-          <button class="view-btn" data-url="${pin.url}">View</button>
-          ${pin.downloaded ? `<button class="redownload-btn">Re-download</button>` : ''}
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-// Attach event listeners to pin items
-function attachPinEventListeners() {
-  document.querySelectorAll('.pin-checkbox').forEach(checkbox => {
-    checkbox.addEventListener('change', (e) => {
-      const pinItem = e.target.closest('.pin-item');
-      const pinId = pinItem.dataset.pinId;
-      const pin = pinsData.pins.find(p => p.id === pinId);
-      if (pin) {
-        pin.selected = e.target.checked;
-        triggerAutosave();
-        updateStats();
-      }
-    });
-  });
-
-  document.querySelectorAll('.view-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      const url = e.target.dataset.url;
-      chrome.tabs.create({ url });
-    });
-  });
-
-  document.querySelectorAll('.redownload-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      const pinItem = e.target.closest('.pin-item');
-      const pinId = pinItem.dataset.pinId;
-      const pin = pinsData.pins.find(p => p.id === pinId);
-      if (pin) {
-        downloadPin(pin);
-      }
-    });
-  });
-}
-
-// Download selected pins with anti-bot protections
 async function downloadSelected() {
-  const selectedPins = pinsData.pins.filter(p => p.selected && !p.downloaded);
+  const pins = getVisiblePins().filter(p => p.selected && !p.downloaded);
+  if (pins.length === 0) { showStatus('No undownloaded selected pins', 'error'); return; }
+  await runDownload(pins);
+}
 
-  if (selectedPins.length === 0) {
-    showStatus('No pins selected for download', 'error');
-    return;
+async function resumeDownload() {
+  if (!archive.downloads?.checkpoint) return;
+  const cp = archive.downloads.checkpoint;
+  const pins = Object.values(archive.pins)
+    .filter(p => p.profile === currentProfile && p.selected && !p.downloaded);
+  if (pins.length === 0) { showStatus('Nothing to resume', 'info'); clearResume(); return; }
+  await runDownload(pins);
+}
+
+function clearResume() {
+  if (archive.downloads) {
+    archive.downloads.checkpoint = null;
   }
+  el('resumeBanner').style.display = 'none';
+  saveState();
+}
 
-  if (downloadState.isDownloading) {
-    showStatus('Download already in progress', 'error');
-    return;
-  }
+async function runDownload(pins) {
+  if (downloadState.isDownloading) { showStatus('Download in progress', 'error'); return; }
 
-  // Initialize download state
   downloadState.isDownloading = true;
   downloadState.completed = 0;
   downloadState.failed = 0;
-  downloadState.total = selectedPins.length;
-  downloadState.totalBatches = Math.ceil(selectedPins.length / downloadSettings.batchSize);
+  downloadState.total = pins.length;
+  downloadState.totalBatches = Math.ceil(pins.length / downloadSettings.batchSize);
   downloadState.currentBatch = 0;
 
-  // Show progress UI
-  document.getElementById('downloadProgress').style.display = 'block';
-  document.getElementById('downloadSelectedBtn').disabled = true;
+  el('downloadProgress').style.display = '';
+  el('downloadSelectedBtn').disabled = true;
 
-  showStatus(`Starting download of ${selectedPins.length} pins in ${downloadState.totalBatches} batches...`, 'info');
+  archive.downloads = {
+    lastRun: new Date().toISOString(),
+    checkpoint: null,
+    completed: 0,
+    failed: 0,
+    total: pins.length,
+  };
 
-  // Process pins in batches
-  for (let i = 0; i < selectedPins.length; i += downloadSettings.batchSize) {
-    const batch = selectedPins.slice(i, i + downloadSettings.batchSize);
+  showStatus(`Downloading ${pins.length} pins...`, 'info');
+
+  for (let i = 0; i < pins.length; i += downloadSettings.batchSize) {
+    const batch = pins.slice(i, i + downloadSettings.batchSize);
     downloadState.currentBatch++;
 
-    updateDownloadProgress();
+    // Save checkpoint before each batch
+    archive.downloads.checkpoint = { pinIndex: i };
+    saveState();
 
-    // Process each pin in the batch
     for (const pin of batch) {
-      const success = await downloadPinWithRetry(pin);
-
-      if (success) {
+      const ok = await downloadPinWithRetry(pin);
+      if (ok) {
         downloadState.completed++;
+        archive.downloads.completed++;
+        pin.downloaded = true;
+        pin.downloadedAt = new Date().toISOString();
       } else {
         downloadState.failed++;
+        archive.downloads.failed++;
       }
-
       updateDownloadProgress();
-
-      // Random delay between individual downloads within a batch
-      const delay = getRandomDelay(downloadSettings.minDelay, downloadSettings.maxDelay);
-      await sleep(delay);
+      await sleep(randomDelay());
     }
 
-    // Longer delay between batches (if not the last batch)
-    if (i + downloadSettings.batchSize < selectedPins.length) {
-      showStatus(`Batch ${downloadState.currentBatch}/${downloadState.totalBatches} complete. Waiting before next batch...`, 'info');
+    // Batch delay
+    if (i + downloadSettings.batchSize < pins.length) {
+      showStatus(`Batch ${downloadState.currentBatch}/${downloadState.totalBatches} done. Pausing...`, 'info');
       await sleep(downloadSettings.batchDelay);
     }
   }
 
-  // Download complete
+  // Done
   downloadState.isDownloading = false;
-  document.getElementById('downloadSelectedBtn').disabled = false;
-
-  const message = `Download complete! ${downloadState.completed} succeeded, ${downloadState.failed} failed.`;
-  showStatus(message, downloadState.failed > 0 ? 'warning' : 'success');
-
-  // Hide progress after a delay
-  setTimeout(() => {
-    document.getElementById('downloadProgress').style.display = 'none';
-  }, 5000);
-
+  archive.downloads.checkpoint = null;
+  el('downloadSelectedBtn').disabled = false;
+  saveState();
   renderPins();
-  updateStats();
+
+  const msg = `Done: ${downloadState.completed} downloaded, ${downloadState.failed} failed`;
+  showStatus(msg, downloadState.failed > 0 ? 'warning' : 'success');
+
+  setTimeout(() => { el('downloadProgress').style.display = 'none'; }, 5000);
 }
 
-// Download a single pin with retry logic and exponential backoff
-async function downloadPinWithRetry(pin, retryCount = 0) {
+async function downloadPinWithRetry(pin, attempt = 0) {
   try {
-    const success = await downloadPin(pin);
-    if (success) {
-      return true;
-    }
-
-    // Retry logic
-    if (retryCount < downloadSettings.maxRetries) {
-      const backoffDelay = downloadSettings.exponentialBackoff
-        ? Math.min(downloadSettings.maxDelay * Math.pow(2, retryCount), 30000)
+    return await downloadPin(pin);
+  } catch (err) {
+    if (attempt < downloadSettings.maxRetries) {
+      const delay = downloadSettings.exponentialBackoff
+        ? Math.min(downloadSettings.maxDelay * Math.pow(2, attempt), 30000)
         : downloadSettings.maxDelay;
-
-      console.log(`Retrying pin ${pin.id} (attempt ${retryCount + 1}/${downloadSettings.maxRetries}) after ${backoffDelay}ms`);
-      await sleep(backoffDelay);
-      return downloadPinWithRetry(pin, retryCount + 1);
+      await sleep(delay);
+      return downloadPinWithRetry(pin, attempt + 1);
     }
-
-    return false;
-  } catch (error) {
-    console.error('Error downloading pin:', error);
-
-    if (retryCount < downloadSettings.maxRetries) {
-      const backoffDelay = downloadSettings.exponentialBackoff
-        ? Math.min(downloadSettings.maxDelay * Math.pow(2, retryCount), 30000)
-        : downloadSettings.maxDelay;
-
-      await sleep(backoffDelay);
-      return downloadPinWithRetry(pin, retryCount + 1);
-    }
-
+    console.warn(`Download failed for pin ${pin.id}:`, err);
     return false;
   }
 }
 
-// Download a single pin
-async function downloadPin(pin) {
-  return new Promise((resolve) => {
-    const imageUrl = pin.image || pin.url;
-    const filename = generateFilename(pin);
+function downloadPin(pin) {
+  return new Promise((resolve, reject) => {
+    const imageUrl = pin.image || pin.thumbnail;
+    if (!imageUrl) { resolve(false); return; }
+
+    const boardSlug = (pin.board || 'uncategorized').replace(/[^a-z0-9]/gi, '_');
+    const titleSlug = (pin.title || pin.id).replace(/[^a-z0-9]/gi, '_').substring(0, 50);
+    const filename = `pinterest/${pin.profile || 'unknown'}/${boardSlug}/${titleSlug}_${pin.id}.jpg`;
 
     chrome.runtime.sendMessage({
       action: 'downloadImage',
       url: imageUrl,
-      filename: filename,
-      pinId: pin.id
-    }, (response) => {
-      if (response && response.success) {
-        pin.downloaded = true;
+      filename,
+      pinId: pin.id,
+    }, response => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+      } else if (response?.success) {
         pin.downloadPath = response.path;
-        triggerAutosave();
         resolve(true);
       } else {
         resolve(false);
@@ -640,216 +446,380 @@ async function downloadPin(pin) {
   });
 }
 
-// Generate filename for download
-function generateFilename(pin) {
-  const boardName = (pin.board || 'uncategorized').replace(/[^a-z0-9]/gi, '_');
-  const pinTitle = (pin.title || pin.id).replace(/[^a-z0-9]/gi, '_').substring(0, 50);
-  const timestamp = Date.now();
-  return `pinterest/${boardName}/${pinTitle}_${timestamp}.jpg`;
-}
+// ── Rendering ─────────────────────────────────────────────
 
-// Select/Deselect all
-function selectAll() {
-  pinsData.pins.forEach(pin => pin.selected = true);
-  triggerAutosave();
-  renderPins();
+function renderAll() {
+  if (currentProfile && archive.profiles[currentProfile]) {
+    el('usernameInput').value = currentProfile;
+    renderBoards();
+    renderPins();
+    checkForResume();
+  }
+  applySettings();
   updateStats();
 }
 
-function deselectAll() {
-  pinsData.pins.forEach(pin => pin.selected = false);
-  triggerAutosave();
-  renderPins();
-  updateStats();
-}
+function renderBoards() {
+  const profile = archive.profiles[currentProfile];
+  if (!profile) return;
 
-// Update statistics
-function updateStats() {
-  document.getElementById('totalPins').textContent = pinsData.pins.length;
-  document.getElementById('selectedPins').textContent = pinsData.pins.filter(p => p.selected).length;
-  document.getElementById('downloadedPins').textContent = pinsData.pins.filter(p => p.downloaded).length;
-}
+  const boardNames = Object.keys(profile.boards);
+  el('boardSection').style.display = boardNames.length ? '' : 'none';
+  el('boardCount').textContent = boardNames.length;
 
-// Search functionality
-function handleSearch() {
-  renderPins();
-}
+  const grid = el('boardGrid');
+  grid.innerHTML = boardNames.map(name => {
+    const b = profile.boards[name];
+    const checked = boardSelections[name] !== false;
+    const lastFetched = b.lastFetched ? timeAgo(new Date(b.lastFetched).getTime()) : 'never';
+    const pinCount = b.pinCount ?? b.pins?.length ?? '?';
 
-// Storage functions
-function loadState() {
-  chrome.storage.local.get(['pinsData', 'downloadSettings'], (result) => {
-    if (result.pinsData) {
-      pinsData = result.pinsData;
-      if (pinsData.username) {
-        document.getElementById('usernameInput').value = pinsData.username;
-      }
-      renderPins();
-      updateStats();
-    }
-    if (result.downloadSettings) {
-      downloadSettings = result.downloadSettings;
-      applySettings();
-    }
+    return `
+      <div class="board-card" data-board="${esc(name)}">
+        <label class="board-card-inner">
+          <input type="checkbox" class="board-checkbox" ${checked ? 'checked' : ''}>
+          ${b.coverImage ? `<img src="${esc(b.coverImage)}" class="board-cover" alt="">` : '<div class="board-cover-placeholder"></div>'}
+          <div class="board-card-info">
+            <div class="board-card-name">${esc(name)}</div>
+            <div class="board-card-meta">${pinCount} pins &middot; ${lastFetched}</div>
+          </div>
+        </label>
+      </div>
+    `;
+  }).join('');
+
+  // Attach board checkbox listeners
+  grid.querySelectorAll('.board-card').forEach(card => {
+    const name = card.dataset.board;
+    card.querySelector('.board-checkbox').addEventListener('change', e => {
+      boardSelections[name] = e.target.checked;
+    });
   });
+}
+
+function getVisiblePins() {
+  if (!currentProfile) return [];
+  return Object.values(archive.pins).filter(p => p.profile === currentProfile);
+}
+
+function renderPins() {
+  let pins = getVisiblePins();
+  if (pins.length === 0) {
+    el('pinControls').style.display = 'none';
+    el('pinsList').innerHTML = '<div class="empty-state"><h3>No Pins</h3><p>Load a profile and select boards to fetch pins.</p></div>';
+    return;
+  }
+
+  el('pinControls').style.display = '';
+
+  // Search filter
+  const search = el('searchInput').value.toLowerCase();
+  if (search) {
+    pins = pins.filter(p =>
+      (p.title?.toLowerCase().includes(search)) ||
+      (p.description?.toLowerCase().includes(search)) ||
+      (p.board?.toLowerCase().includes(search))
+    );
+  }
+
+  // Category filter
+  const filter = el('filterSelect').value;
+  if (filter === 'new') pins = pins.filter(p => newPinIds.has(p.id));
+  else if (filter === 'downloaded') pins = pins.filter(p => p.downloaded);
+  else if (filter === 'not-downloaded') pins = pins.filter(p => !p.downloaded);
+  else if (filter === 'selected') pins = pins.filter(p => p.selected);
+
+  // Group by board
+  const groups = {};
+  for (const pin of pins) {
+    const board = pin.board || 'Uncategorized';
+    if (!groups[board]) groups[board] = [];
+    groups[board].push(pin);
+  }
+
+  const html = Object.entries(groups).map(([boardName, boardPins]) => {
+    const downloaded = boardPins.filter(p => p.downloaded).length;
+    const selected = boardPins.filter(p => p.selected).length;
+    const newCount = boardPins.filter(p => newPinIds.has(p.id)).length;
+
+    return `
+      <div class="board-group">
+        <div class="board-header">
+          <h3 class="board-title">${esc(boardName)}</h3>
+          <div class="board-stats">
+            ${boardPins.length} pins · ${selected} selected · ${downloaded} downloaded${newCount ? ` · <span class="new-badge">${newCount} new</span>` : ''}
+          </div>
+        </div>
+        ${boardPins.map(pin => pinHTML(pin)).join('')}
+      </div>
+    `;
+  }).join('');
+
+  el('pinsList').innerHTML = html;
+  attachPinListeners();
+  updateStats();
+}
+
+function pinHTML(pin) {
+  const isNew = newPinIds.has(pin.id);
+  const dlClass = pin.downloaded ? 'downloaded' : '';
+  const newDot = isNew ? '<span class="new-dot" title="New since last fetch"></span>' : '';
+  const statusText = pin.downloaded ? 'Downloaded' : 'Pending';
+  const statusClass = pin.downloaded ? 'completed' : 'pending';
+
+  return `
+    <div class="pin-item ${dlClass}" data-pin-id="${pin.id}">
+      <input type="checkbox" class="pin-checkbox" ${pin.selected ? 'checked' : ''}>
+      ${newDot}
+      <img src="${esc(pin.thumbnail || pin.image || '')}" alt="${esc(pin.title || '')}" class="pin-thumbnail"
+        onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2260%22 height=%2260%22%3E%3Crect fill=%22%23ddd%22 width=%2260%22 height=%2260%22/%3E%3C/svg%3E'">
+      <div class="pin-info">
+        <div class="pin-title">${esc(pin.title || 'Untitled Pin')}</div>
+        <div class="pin-meta">${esc(pin.board || '')} · ${pin.id}</div>
+      </div>
+      <div class="pin-status">
+        <span class="status-badge ${statusClass}">${statusText}</span>
+        <button class="view-btn btn btn-sm btn-secondary" data-url="${esc(pin.url || '')}">View</button>
+      </div>
+    </div>
+  `;
+}
+
+function attachPinListeners() {
+  el('pinsList').querySelectorAll('.pin-checkbox').forEach(cb => {
+    cb.addEventListener('change', e => {
+      const pinId = e.target.closest('.pin-item').dataset.pinId;
+      if (archive.pins[pinId]) {
+        archive.pins[pinId].selected = e.target.checked;
+        triggerAutosave();
+        updateStats();
+      }
+    });
+  });
+
+  el('pinsList').querySelectorAll('.view-btn').forEach(btn => {
+    btn.addEventListener('click', e => {
+      const url = e.target.dataset.url;
+      if (url) chrome.tabs.create({ url });
+    });
+  });
+}
+
+function updateStats() {
+  const pins = getVisiblePins();
+  el('totalPins').textContent = pins.length;
+  el('selectedPins').textContent = pins.filter(p => p.selected).length;
+  el('downloadedPins').textContent = pins.filter(p => p.downloaded).length;
+  el('newPins').textContent = newPinIds.size;
+}
+
+function updateDownloadProgress() {
+  const done = downloadState.completed + downloadState.failed;
+  const pct = downloadState.total > 0 ? (done / downloadState.total * 100) : 0;
+  el('progressText').textContent = `Batch ${downloadState.currentBatch}/${downloadState.totalBatches}`;
+  el('progressCount').textContent = `${done}/${downloadState.total}`;
+  el('progressFill').style.width = `${pct}%`;
+}
+
+function checkForResume() {
+  if (archive.downloads?.checkpoint) {
+    const remaining = archive.downloads.total - archive.downloads.completed - archive.downloads.failed;
+    el('resumeBanner').style.display = '';
+    el('resumeText').textContent = `Interrupted download: ${remaining} of ${archive.downloads.total} remaining`;
+  } else {
+    el('resumeBanner').style.display = 'none';
+  }
+}
+
+// ── Board selection helpers ───────────────────────────────
+
+function setBoardSelections(value) {
+  for (const name of Object.keys(boardSelections)) boardSelections[name] = value;
+  el('boardGrid').querySelectorAll('.board-checkbox').forEach(cb => { cb.checked = value; });
+}
+
+function setAllPinSelections(value) {
+  for (const pin of getVisiblePins()) pin.selected = value;
+  triggerAutosave();
+  renderPins();
+}
+
+// ── Persistence ───────────────────────────────────────────
+
+async function loadState() {
+  return new Promise(resolve => {
+    chrome.storage.local.get(['archive', 'pinsData', 'downloadSettings', 'currentProfile'], result => {
+      if (result.archive) {
+        archive = result.archive;
+      } else if (result.pinsData) {
+        // Migrate v1 → v2
+        archive = migrateV1(result.pinsData);
+      }
+      if (result.downloadSettings) {
+        downloadSettings = result.downloadSettings;
+      }
+      if (result.currentProfile) {
+        currentProfile = result.currentProfile;
+      }
+      resolve();
+    });
+  });
+}
+
+function migrateV1(v1) {
+  const a = emptyArchive();
+  const username = v1.username || 'unknown';
+  a.profiles[username] = { lastFetched: v1.lastFetch, boards: {} };
+
+  // Build boards from v1.boards
+  if (v1.boards) {
+    for (const [name, pinIds] of Object.entries(v1.boards)) {
+      a.profiles[username].boards[name] = {
+        url: `/${username}/${name.replace(/\s+/g, '-').toLowerCase()}/`,
+        coverImage: null,
+        pinCount: pinIds.length,
+        lastFetched: v1.lastFetch,
+        pins: pinIds,
+      };
+    }
+  }
+
+  // Migrate pins
+  if (v1.pins) {
+    for (const pin of v1.pins) {
+      a.pins[pin.id] = {
+        id: pin.id,
+        title: pin.title || 'Untitled Pin',
+        description: pin.description || '',
+        image: pin.image,
+        thumbnail: pin.thumbnail,
+        url: pin.url,
+        board: pin.board || 'Uncategorized',
+        profile: username,
+        firstSeen: v1.lastFetch || new Date().toISOString(),
+        lastSeen: v1.lastFetch || new Date().toISOString(),
+        downloaded: pin.downloaded || false,
+        downloadPath: pin.downloadPath || null,
+        downloadedAt: null,
+        selected: pin.selected || false,
+      };
+    }
+  }
+
+  return a;
 }
 
 function saveState() {
-  chrome.storage.local.set({ pinsData, downloadSettings }, () => {
-    console.log('State saved');
+  chrome.storage.local.set({
+    archive,
+    downloadSettings,
+    currentProfile,
   });
 }
 
-function applySettings() {
-  document.getElementById('minDelay').value = downloadSettings.minDelay;
-  document.getElementById('maxDelay').value = downloadSettings.maxDelay;
-  document.getElementById('batchSize').value = downloadSettings.batchSize;
-  document.getElementById('batchDelay').value = downloadSettings.batchDelay;
-  document.getElementById('maxRetries').value = downloadSettings.maxRetries;
-  document.getElementById('exponentialBackoff').checked = downloadSettings.exponentialBackoff;
-}
-
-function updateSettings() {
-  downloadSettings.minDelay = parseInt(document.getElementById('minDelay').value);
-  downloadSettings.maxDelay = parseInt(document.getElementById('maxDelay').value);
-  downloadSettings.batchSize = parseInt(document.getElementById('batchSize').value);
-  downloadSettings.batchDelay = parseInt(document.getElementById('batchDelay').value);
-  downloadSettings.maxRetries = parseInt(document.getElementById('maxRetries').value);
-  downloadSettings.exponentialBackoff = document.getElementById('exponentialBackoff').checked;
-
-  // Validate settings
-  if (downloadSettings.minDelay > downloadSettings.maxDelay) {
-    downloadSettings.maxDelay = downloadSettings.minDelay;
-    document.getElementById('maxDelay').value = downloadSettings.maxDelay;
-  }
-
-  saveState();
-  showStatus('Settings updated', 'success');
-}
-
+let autosaveTimer = null;
 function triggerAutosave() {
-  if (!autosaveEnabled) return;
-
-  clearTimeout(autosaveTimeout);
-  autosaveTimeout = setTimeout(() => {
-    saveState();
-    showAutosaveIndicator();
-  }, 1000);
+  clearTimeout(autosaveTimer);
+  autosaveTimer = setTimeout(saveState, 1000);
 }
 
-function showAutosaveIndicator() {
-  const indicator = document.getElementById('autosaveStatus');
-  indicator.textContent = 'Autosave: Saved ✓';
-  setTimeout(() => {
-    indicator.textContent = 'Autosave: Enabled';
-  }, 2000);
-}
+// ── Export / Import ───────────────────────────────────────
 
-function manualSave() {
-  saveState();
-  showStatus('Data saved successfully!', 'success');
-}
-
-// Export/Import
-function exportData() {
-  const dataStr = JSON.stringify(pinsData, null, 2);
-  const blob = new Blob([dataStr], { type: 'application/json' });
+function exportArchive() {
+  const blob = new Blob([JSON.stringify(archive, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
-
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const filename = `pinterest_pins_${timestamp}.json`;
-
-  chrome.downloads.download({
-    url: url,
-    filename: filename,
-    saveAs: true
-  });
-
-  showStatus('Export started!', 'success');
+  const ts = new Date().toISOString().replace(/[:.]/g, '-');
+  chrome.downloads.download({ url, filename: `pinterest_archive_${ts}.json`, saveAs: true });
+  showStatus('Export started', 'success');
 }
 
-function importData(event) {
+function importArchive(event) {
   const file = event.target.files[0];
   if (!file) return;
 
   const reader = new FileReader();
-  reader.onload = (e) => {
+  reader.onload = e => {
     try {
-      const imported = JSON.parse(e.target.result);
-
-      if (confirm('This will replace your current data. Continue?')) {
-        pinsData = imported;
-        saveState();
-        renderPins();
-        updateStats();
-        showStatus('Data imported successfully!', 'success');
+      const data = JSON.parse(e.target.result);
+      if (data.version === ARCHIVE_VERSION) {
+        archive = data;
+      } else if (data.pins && Array.isArray(data.pins)) {
+        archive = migrateV1(data);
+      } else {
+        showStatus('Unrecognized archive format', 'error');
+        return;
       }
-    } catch (error) {
-      showStatus('Error importing data: Invalid JSON', 'error');
+      saveState();
+      renderAll();
+      showStatus('Imported successfully', 'success');
+    } catch (err) {
+      showStatus(`Import error: ${err.message}`, 'error');
     }
   };
   reader.readAsText(file);
-
-  // Reset file input
   event.target.value = '';
 }
 
-// Utility functions
-function showStatus(message, type = 'info') {
-  const statusEl = document.getElementById('fetchStatus');
-  statusEl.textContent = message;
-  statusEl.className = `status-message ${type}`;
+// ── Settings ──────────────────────────────────────────────
 
+function applySettings() {
+  el('minDelay').value = downloadSettings.minDelay;
+  el('maxDelay').value = downloadSettings.maxDelay;
+  el('batchSize').value = downloadSettings.batchSize;
+  el('batchDelay').value = downloadSettings.batchDelay;
+  el('maxRetries').value = downloadSettings.maxRetries;
+  el('exponentialBackoff').checked = downloadSettings.exponentialBackoff;
+}
+
+function updateSettings() {
+  downloadSettings.minDelay = parseInt(el('minDelay').value) || 2000;
+  downloadSettings.maxDelay = parseInt(el('maxDelay').value) || 5000;
+  downloadSettings.batchSize = parseInt(el('batchSize').value) || 5;
+  downloadSettings.batchDelay = parseInt(el('batchDelay').value) || 10000;
+  downloadSettings.maxRetries = parseInt(el('maxRetries').value) || 3;
+  downloadSettings.exponentialBackoff = el('exponentialBackoff').checked;
+  if (downloadSettings.minDelay > downloadSettings.maxDelay) {
+    downloadSettings.maxDelay = downloadSettings.minDelay;
+    el('maxDelay').value = downloadSettings.maxDelay;
+  }
+  saveState();
+}
+
+// ── Utilities ─────────────────────────────────────────────
+
+function el(id) { return document.getElementById(id); }
+
+function esc(text) {
+  if (!text) return '';
+  const d = document.createElement('div');
+  d.textContent = text;
+  return d.innerHTML;
+}
+
+function showStatus(msg, type = 'info') {
+  const bar = el('statusBar');
+  bar.textContent = msg;
+  bar.className = `status-message ${type}`;
   if (type === 'success' || type === 'error') {
-    setTimeout(() => {
-      statusEl.className = 'status-message';
-    }, 5000);
+    setTimeout(() => { bar.className = 'status-message'; }, 5000);
   }
 }
 
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
+function debounce(fn, ms) {
+  let timer;
+  return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), ms); };
 }
 
-function debounce(func, wait) {
-  let timeout;
-  return function executedFunction(...args) {
-    const later = () => {
-      clearTimeout(timeout);
-      func(...args);
-    };
-    clearTimeout(timeout);
-    timeout = setTimeout(later, wait);
-  };
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function randomDelay() {
+  return Math.floor(Math.random() * (downloadSettings.maxDelay - downloadSettings.minDelay + 1)) + downloadSettings.minDelay;
 }
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+function timeAgo(ts) {
+  const diff = (Date.now() - ts) / 1000;
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
 }
-
-function getRandomDelay(min, max) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-
-function updateDownloadProgress() {
-  const percent = downloadState.total > 0 ? (downloadState.completed + downloadState.failed) / downloadState.total * 100 : 0;
-
-  document.getElementById('progressText').textContent = `Batch ${downloadState.currentBatch}/${downloadState.totalBatches}`;
-  document.getElementById('progressCount').textContent = `${downloadState.completed + downloadState.failed}/${downloadState.total}`;
-  document.getElementById('progressFill').style.width = `${percent}%`;
-}
-
-// Listen for messages from background script
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.action === 'downloadComplete') {
-    const pin = pinsData.pins.find(p => p.id === message.pinId);
-    if (pin) {
-      pin.downloaded = true;
-      pin.downloadPath = message.path;
-      triggerAutosave();
-      renderPins();
-      updateStats();
-    }
-  }
-});

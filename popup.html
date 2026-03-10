@@ -12,107 +12,104 @@
       <h1>Pinterest Pin Manager</h1>
     </header>
 
-    <div class="controls">
-      <div class="fetch-grid">
-        <div class="fetch-col-1">
-          <input type="text" id="usernameInput" placeholder="Username">
-          <button id="fetchAllBtn" class="btn btn-primary">Fetch All</button>
-          <label class="radio-label">
-            <input type="radio" name="grouping" value="all" checked>
-            All Pins
-          </label>
+    <!-- Tab connection + profile input -->
+    <div class="toolbar">
+      <div class="toolbar-row">
+        <div class="tab-status" id="pinterestTabStatus">
+          <span class="status-dot" id="tabStatusDot"></span>
+          <span id="tabStatusText">Checking...</span>
+          <button id="refreshTabsBtn" class="btn-icon" title="Refresh tabs">&#x21bb;</button>
         </div>
-        <div class="fetch-col-2">
-          <input type="text" id="searchInput" placeholder="Search pins...">
-          <button id="fetchByBoardBtn" class="btn btn-primary">By Boards</button>
-          <label class="radio-label">
-            <input type="radio" name="grouping" value="boards">
-            By Boards
-          </label>
-        </div>
-        <div class="fetch-col-3">
-          <div class="pinterest-tab-section">
-            <div class="tab-status" id="pinterestTabStatus">
-              <span class="status-indicator" id="tabStatusIndicator">●</span>
-              <span id="tabStatusText">Checking...</span>
-              <button id="refreshTabsBtn" class="btn-icon" title="Refresh">🔄</button>
-            </div>
-            <div id="tabSelector" class="tab-selector" style="display: none;">
-              <!-- Dynamically populated with Pinterest tabs -->
-            </div>
-            <button id="openPinterestBtn" class="btn btn-link" style="display: none;">
-              Open Pinterest
-            </button>
-          </div>
-        </div>
-      </div>
-      <div id="fetchStatus" class="status-message"></div>
-
-      <div class="save-section">
-        <span class="section-label">Storage:</span>
-        <button id="manualSaveBtn" class="btn btn-secondary btn-sm">Save</button>
-        <button id="exportBtn" class="btn btn-secondary btn-sm">Export</button>
-        <button id="importBtn" class="btn btn-secondary btn-sm">Import</button>
-        <span class="autosave-indicator" id="autosaveStatus">Autosave: On</span>
-        <input type="file" id="importFile" accept=".json" style="display: none;">
+        <button id="openPinterestBtn" class="btn btn-sm btn-secondary" style="display:none">Open Pinterest</button>
       </div>
 
-      <div class="settings-section">
-        <details>
-          <summary>Anti-Bot Settings</summary>
+      <div class="toolbar-row">
+        <input type="text" id="usernameInput" placeholder="Pinterest username">
+        <button id="loadProfileBtn" class="btn btn-primary">Load Profile</button>
+        <div class="toolbar-spacer"></div>
+        <button id="exportBtn" class="btn btn-sm btn-secondary">Export</button>
+        <button id="importBtn" class="btn btn-sm btn-secondary">Import</button>
+        <input type="file" id="importFile" accept=".json" style="display:none">
+      </div>
+
+      <div id="statusBar" class="status-message"></div>
+    </div>
+
+    <!-- Board selection -->
+    <div id="boardSection" class="board-section" style="display:none">
+      <div class="section-header">
+        <span class="section-title">Boards (<span id="boardCount">0</span>)</span>
+        <div class="section-actions">
+          <button id="selectAllBoardsBtn" class="btn btn-sm btn-secondary">Select All</button>
+          <button id="deselectAllBoardsBtn" class="btn btn-sm btn-secondary">Deselect All</button>
+          <button id="loadSelectedBoardsBtn" class="btn btn-sm btn-primary">Load Selected</button>
+        </div>
+      </div>
+      <div id="boardGrid" class="board-grid"></div>
+    </div>
+
+    <!-- Diff summary (shown after re-fetch) -->
+    <div id="diffSection" class="diff-section" style="display:none">
+      <div class="diff-summary" id="diffSummary"></div>
+      <button id="selectNewPinsBtn" class="btn btn-sm btn-primary">Select New Pins Only</button>
+      <button id="dismissDiffBtn" class="btn btn-sm btn-secondary">Dismiss</button>
+    </div>
+
+    <!-- Pin controls -->
+    <div id="pinControls" class="pin-controls" style="display:none">
+      <div class="pin-controls-row">
+        <input type="text" id="searchInput" placeholder="Search pins...">
+        <select id="filterSelect">
+          <option value="all">All pins</option>
+          <option value="new">New only</option>
+          <option value="downloaded">Downloaded</option>
+          <option value="not-downloaded">Not downloaded</option>
+          <option value="selected">Selected</option>
+        </select>
+        <div class="toolbar-spacer"></div>
+        <button id="selectAllPinsBtn" class="btn btn-sm btn-secondary">Select All</button>
+        <button id="deselectAllPinsBtn" class="btn btn-sm btn-secondary">Deselect All</button>
+        <button id="downloadSelectedBtn" class="btn btn-sm btn-success">Download Selected</button>
+      </div>
+      <div class="pin-controls-row">
+        <span class="download-stats">
+          Total: <strong id="totalPins">0</strong> &middot;
+          Selected: <strong id="selectedPins">0</strong> &middot;
+          Downloaded: <strong id="downloadedPins">0</strong> &middot;
+          New: <strong id="newPins">0</strong>
+        </span>
+        <div class="toolbar-spacer"></div>
+        <details class="settings-toggle">
+          <summary>Settings</summary>
           <div class="settings-grid">
-            <div class="setting-item">
-              <label for="minDelay">Min Delay (ms)</label>
-              <input type="number" id="minDelay" value="2000" min="500" max="30000" step="100">
-            </div>
-            <div class="setting-item">
-              <label for="maxDelay">Max Delay (ms)</label>
-              <input type="number" id="maxDelay" value="5000" min="1000" max="60000" step="100">
-            </div>
-            <div class="setting-item">
-              <label for="batchSize">Batch Size</label>
-              <input type="number" id="batchSize" value="5" min="1" max="50">
-            </div>
-            <div class="setting-item">
-              <label for="batchDelay">Batch Delay (ms)</label>
-              <input type="number" id="batchDelay" value="10000" min="5000" max="120000" step="1000">
-            </div>
-            <div class="setting-item">
-              <label for="maxRetries">Max Retries</label>
-              <input type="number" id="maxRetries" value="3" min="0" max="10">
-            </div>
-            <div class="setting-item">
-              <label>
-                <input type="checkbox" id="exponentialBackoff" checked>
-                Exponential Backoff
-              </label>
-            </div>
+            <label>Min delay <input type="number" id="minDelay" value="2000" min="500" step="100"></label>
+            <label>Max delay <input type="number" id="maxDelay" value="5000" min="1000" step="100"></label>
+            <label>Batch size <input type="number" id="batchSize" value="5" min="1" max="50"></label>
+            <label>Batch delay <input type="number" id="batchDelay" value="10000" min="5000" step="1000"></label>
+            <label>Max retries <input type="number" id="maxRetries" value="3" min="0" max="10"></label>
+            <label><input type="checkbox" id="exponentialBackoff" checked> Exp. backoff</label>
           </div>
         </details>
       </div>
-
-      <div class="download-section">
-        <span class="section-label">Downloads:</span>
-        <button id="downloadSelectedBtn" class="btn btn-success btn-sm">Download</button>
-        <button id="selectAllBtn" class="btn btn-secondary btn-sm">Select All</button>
-        <button id="deselectAllBtn" class="btn btn-secondary btn-sm">Deselect All</button>
-        <span class="download-stats">
-          <span>Total: <strong id="totalPins">0</strong></span>
-          <span>Selected: <strong id="selectedPins">0</strong></span>
-          <span>Downloaded: <strong id="downloadedPins">0</strong></span>
-        </span>
-        <div id="downloadProgress" class="download-progress" style="display: none;">
-          <div class="progress-info">
-            <span id="progressText">Downloading...</span>
-            <span id="progressCount">0/0</span>
-          </div>
-          <div class="progress-bar">
-            <div id="progressFill" class="progress-fill"></div>
-          </div>
+      <!-- Resume banner -->
+      <div id="resumeBanner" class="resume-banner" style="display:none">
+        <span id="resumeText">Interrupted download: 0/0 remaining</span>
+        <button id="resumeBtn" class="btn btn-sm btn-primary">Resume</button>
+        <button id="clearResumeBtn" class="btn btn-sm btn-secondary">Clear</button>
+      </div>
+      <!-- Download progress -->
+      <div id="downloadProgress" class="download-progress" style="display:none">
+        <div class="progress-info">
+          <span id="progressText">Downloading...</span>
+          <span id="progressCount">0/0</span>
+        </div>
+        <div class="progress-bar">
+          <div id="progressFill" class="progress-fill"></div>
         </div>
       </div>
     </div>
 
+    <!-- Pin list -->
     <div class="pins-container">
       <div id="pinsList"></div>
     </div>
