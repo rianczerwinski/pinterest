@@ -368,6 +368,7 @@ async function loadSelectedBoards() {
       // If board-level pin count was from the page, update the stored metadata
       if (result.boardPinCount != null) {
         boardMeta.pinCount = result.boardPinCount;
+        boardMeta.pinCountVerified = true;
       }
 
       const boardPinIds = [];
@@ -491,6 +492,7 @@ async function scrapeAccurateCounts() {
 
       if (result.success && result.pinCount != null) {
         boardMeta.pinCount = result.pinCount;
+        boardMeta.pinCountVerified = true;
         updated++;
       }
     }
@@ -687,8 +689,8 @@ function renderBoards() {
     const lastFetched = b.lastFetched ? timeAgo(new Date(b.lastFetched).getTime()) : 'never';
     const pinCount = b.pinCount ?? b.pins?.length ?? '?';
 
-    // Flag truncated counts (round thousands suggest "Xk" approximation)
-    const isTruncated = typeof pinCount === 'number' && pinCount >= 1000 && pinCount % 100 === 0;
+    // Flag truncated counts (round thousands suggest "Xk" approximation) — but not if verified by scraping
+    const isTruncated = typeof pinCount === 'number' && pinCount >= 1000 && pinCount % 100 === 0 && !b.pinCountVerified;
     if (isTruncated) truncatedCount++;
 
     const countDisplay = isTruncated
