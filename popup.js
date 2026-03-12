@@ -35,6 +35,8 @@ function emptyArchive() {
 
 document.addEventListener('DOMContentLoaded', () => {
   loadState().then(() => {
+    // Start fresh — no pins selected on load
+    for (const pin of Object.values(archive.pins)) pin.selected = false;
     initEventListeners();
     refreshTabStatus();
     renderAll();
@@ -784,19 +786,23 @@ function renderPins() {
     const selected = boardPins.filter(p => p.selected).length;
     const newCount = boardPins.filter(p => newPinIds.has(p.id)).length;
 
+    const allSelected = boardPins.length > 0 && boardPins.every(p => p.selected);
+    const noneSelected = boardPins.every(p => !p.selected);
+
     return `
       <div class="board-group" data-board-group="${esc(boardName)}">
-        <div class="board-header" data-collapsed="false">
+        <div class="board-header" data-collapsed="true">
           <div class="board-header-left">
-            <span class="board-chevron">▼</span>
+            <span class="board-chevron">▶</span>
             <h3 class="board-title">${esc(boardName)}</h3>
           </div>
           <div class="board-stats">
             ${boardPins.length} pins · ${selected} selected · ${downloaded} downloaded${newCount ? ` · <span class="new-badge">${newCount} new</span>` : ''}
-            <button class="btn btn-sm btn-secondary board-select-all-btn" data-board="${esc(boardName)}">Select All</button>
+            <button class="btn btn-sm btn-secondary board-select-all-btn" data-board="${esc(boardName)}" ${allSelected ? 'disabled' : ''}>${allSelected ? 'All Selected' : 'Select All'}</button>
+            <button class="btn btn-sm btn-secondary board-deselect-all-btn" data-board="${esc(boardName)}" ${noneSelected ? 'disabled' : ''}>${noneSelected ? 'None Selected' : 'Deselect All'}</button>
           </div>
         </div>
-        <div class="board-pins-list">
+        <div class="board-pins-list" style="display:none">
           ${boardPins.map(pin => pinHTML(pin)).join('')}
         </div>
       </div>
@@ -846,25 +852,34 @@ function attachPinListeners() {
     });
   });
 
-  // Per-board select all
-  el('pinsList').querySelectorAll('.board-select-all-btn').forEach(btn => {
-    btn.addEventListener('click', e => {
-      e.stopPropagation(); // don't toggle collapse
-      const boardName = btn.dataset.board;
-      const group = btn.closest('.board-group');
-      const allChecked = [...group.querySelectorAll('.pin-checkbox')].every(cb => cb.checked);
-      const newValue = !allChecked;
+  // Per-board select / deselect buttons
+  el('pinsList').querySelectorAll('.board-group').forEach(group => {
+    const selectBtn = group.querySelector('.board-select-all-btn');
+    const deselectBtn = group.querySelector('.board-deselect-all-btn');
+
+    function updateBoardButtons() {
+      const checkboxes = [...group.querySelectorAll('.pin-checkbox')];
+      const allChecked = checkboxes.length > 0 && checkboxes.every(cb => cb.checked);
+      const noneChecked = checkboxes.every(cb => !cb.checked);
+      selectBtn.disabled = allChecked;
+      selectBtn.textContent = allChecked ? 'All Selected' : 'Select All';
+      deselectBtn.disabled = noneChecked;
+      deselectBtn.textContent = noneChecked ? 'None Selected' : 'Deselect All';
+    }
+
+    function setBoardPins(value) {
       group.querySelectorAll('.pin-item').forEach(item => {
         const pinId = item.dataset.pinId;
-        if (archive.pins[pinId]) {
-          archive.pins[pinId].selected = newValue;
-        }
-        item.querySelector('.pin-checkbox').checked = newValue;
+        if (archive.pins[pinId]) archive.pins[pinId].selected = value;
+        item.querySelector('.pin-checkbox').checked = value;
       });
-      btn.textContent = newValue ? 'Deselect All' : 'Select All';
+      updateBoardButtons();
       triggerAutosave();
       updateStats();
-    });
+    }
+
+    selectBtn.addEventListener('click', e => { e.stopPropagation(); setBoardPins(true); });
+    deselectBtn.addEventListener('click', e => { e.stopPropagation(); setBoardPins(false); });
   });
 
   el('pinsList').querySelectorAll('.pin-thumbnail').forEach(img => {
@@ -873,11 +888,25 @@ function attachPinListeners() {
 
   el('pinsList').querySelectorAll('.pin-checkbox').forEach(cb => {
     cb.addEventListener('change', e => {
-      const pinId = e.target.closest('.pin-item').dataset.pinId;
+      const pinItem = e.target.closest('.pin-item');
+      const pinId = pinItem.dataset.pinId;
       if (archive.pins[pinId]) {
         archive.pins[pinId].selected = e.target.checked;
         triggerAutosave();
         updateStats();
+        // Update per-board button states
+        const group = pinItem.closest('.board-group');
+        if (group) {
+          const checkboxes = [...group.querySelectorAll('.pin-checkbox')];
+          const allChecked = checkboxes.length > 0 && checkboxes.every(c => c.checked);
+          const noneChecked = checkboxes.every(c => !c.checked);
+          const selBtn = group.querySelector('.board-select-all-btn');
+          const deselBtn = group.querySelector('.board-deselect-all-btn');
+          selBtn.disabled = allChecked;
+          selBtn.textContent = allChecked ? 'All Selected' : 'Select All';
+          deselBtn.disabled = noneChecked;
+          deselBtn.textContent = noneChecked ? 'None Selected' : 'Deselect All';
+        }
       }
     });
   });
