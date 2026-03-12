@@ -30,90 +30,49 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-// Download image function
+// Download image — pass URL directly to chrome.downloads (no fetch/base64 needed)
 async function downloadImage(url, filename, pinId) {
-  try {
-    const result = await fetchImageAsDataUrl(url);
-    if (!result) {
-      return { success: false, error: `Failed to fetch image: ${url}` };
-    }
+  const result = await tryDownload(url, filename, pinId);
+  if (result.success) return result;
 
-    const extension = result.type.split('/')[1] || 'jpg';
-    const filenameWithExt = filename.replace(/\.(jpg|png|gif|webp)$/i, '') + '.' + extension;
-
-    return new Promise((resolve, reject) => {
-      chrome.downloads.download({
-        url: result.dataUrl,
-        filename: filenameWithExt,
-        conflictAction: 'uniquify',
-        saveAs: false
-      }, (downloadId) => {
-        if (chrome.runtime.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-          return;
-        }
-
-        const listener = (delta) => {
-          if (delta.id === downloadId && delta.state) {
-            if (delta.state.current === 'complete') {
-              chrome.downloads.onChanged.removeListener(listener);
-              chrome.downloads.search({ id: downloadId }, (results) => {
-                resolve({
-                  success: true,
-                  downloadId,
-                  path: results?.[0]?.filename || filenameWithExt,
-                  pinId,
-                });
-              });
-            } else if (delta.state.current === 'interrupted') {
-              chrome.downloads.onChanged.removeListener(listener);
-              reject(new Error('Download interrupted'));
-            }
-          }
-        };
-        chrome.downloads.onChanged.addListener(listener);
-      });
-    });
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
-}
-
-/** Fetch image and convert to data URL (service workers don't have URL.createObjectURL) */
-async function fetchImageAsDataUrl(url) {
-  // Try the URL as-is first
-  const result = await tryFetchAsDataUrl(url);
-  if (result) return result;
-
-  // If URL was upgraded to /originals/, fall back to /736x/
+  // Fallback: /originals/ → /736x/
   if (url.includes('/originals/')) {
     const fallback = url.replace('/originals/', '/736x/');
     console.log(`[Pinterest Pin DL] /originals/ failed, trying /736x/: ${fallback}`);
-    const fallbackResult = await tryFetchAsDataUrl(fallback);
-    if (fallbackResult) return fallbackResult;
+    return await tryDownload(fallback, filename, pinId);
   }
 
-  console.warn(`[Pinterest Pin DL] Failed to fetch image: ${url}`);
-  return null;
+  return result;
 }
 
-async function tryFetchAsDataUrl(url) {
-  try {
-    const resp = await fetch(url);
-    if (!resp.ok) return null;
-    const buf = await resp.arrayBuffer();
-    if (buf.byteLength === 0) return null;
-    const type = resp.headers.get('content-type') || 'image/jpeg';
-    // Convert ArrayBuffer → base64 data URL
-    const bytes = new Uint8Array(buf);
-    let binary = '';
-    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-    const dataUrl = `data:${type};base64,${btoa(binary)}`;
-    return { dataUrl, type };
-  } catch (err) {
-    console.log(`[Pinterest Pin DL] Fetch failed for ${url}:`, err.message);
-    return null;
-  }
+function tryDownload(url, filename, pinId) {
+  return new Promise(resolve => {
+    chrome.downloads.download({
+      url,
+      filename,
+      conflictAction: 'uniquify',
+      saveAs: false,
+    }, downloadId => {
+      if (chrome.runtime.lastError) {
+        resolve({ success: false, error: chrome.runtime.lastError.message });
+        return;
+      }
+
+      const listener = delta => {
+        if (delta.id !== downloadId || !delta.state) return;
+        chrome.downloads.onChanged.removeListener(listener);
+
+        if (delta.state.current === 'complete') {
+          chrome.downloads.search({ id: downloadId }, results => {
+            resolve({ success: true, downloadId, path: results?.[0]?.filename || filename, pinId });
+          });
+        } else if (delta.state.current === 'interrupted') {
+          resolve({ success: false, error: `Download interrupted: ${delta.error?.current || 'unknown'}` });
+        }
+      };
+      chrome.downloads.onChanged.addListener(listener);
+    });
+  });
 }
 
 // Handle installation

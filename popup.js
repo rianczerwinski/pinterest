@@ -571,6 +571,7 @@ async function runDownload(pins) {
 
   el('downloadProgress').style.display = '';
   el('downloadSelectedBtn').disabled = true;
+  updateDownloadProgress();
 
   archive.downloads = {
     lastRun: new Date().toISOString(),
