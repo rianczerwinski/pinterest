@@ -192,6 +192,16 @@ header h1 { font-size: 16px; font-weight: 600; }
 
 /* ── Resume banner ───────────────────────────────────── */
 
+.harvest-verification {
+  padding: 6px 12px; background: #f0f4f8; border-radius: 6px;
+  font-size: 11px; color: #333; line-height: 1.6;
+}
+.harvest-verification .board-row { display: flex; justify-content: space-between; gap: 8px; }
+.harvest-verification .board-name { font-weight: 500; }
+.harvest-verification .match { color: #2e7d32; }
+.harvest-verification .mismatch { color: #c62828; font-weight: 600; }
+.harvest-verification .tombstone { color: #6a6a6a; font-style: italic; }
+
 .resume-banner {
   display: flex; align-items: center; gap: 8px;
   padding: 8px 12px; background: #fff3cd; border-radius: 6px;

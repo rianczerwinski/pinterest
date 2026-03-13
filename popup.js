@@ -437,26 +437,24 @@ async function loadSelectedBoards() {
       showDiff(newPinIds.size, totalPins);
     }
 
-    // Show verification summary — always show per-board accounting
-    const totalTombstones = verificationResults.reduce((sum, v) => sum + (v.tombstones || 0), 0);
+    // Store verification results on profile for persistent display
+    profile.lastHarvest = {
+      timestamp: new Date().toISOString(),
+      boards: verificationResults,
+      totalPins,
+      totalNew,
+      totalUpdated,
+    };
+    saveState();
+
+    // Render persistent verification and status bar summary
+    renderHarvestVerification();
     const mismatches = verificationResults.filter(v => !v.match);
     const countSummary = `${totalPins} pins (${totalNew} new, ${totalUpdated} updated)`;
-
-    // Per-board breakdown: always shown so the user can verify completeness
-    const boardDetails = verificationResults.map(v => {
-      const accounted = v.scraped + (v.tombstones || 0);
-      let detail = `${v.boardName}: ${v.scraped}`;
-      if (v.tombstones) detail += ` + ${v.tombstones} removed`;
-      detail += ` = ${accounted}`;
-      if (v.expected != null) detail += ` of ${v.expected}`;
-      if (!v.match) detail += ' ⚠';
-      return detail;
-    }).join(', ');
-
     if (mismatches.length > 0) {
-      showStatus(`Loaded ${countSummary}. ${boardDetails}`, 'warning');
+      showStatus(`Loaded ${countSummary}. ${mismatches.length} board(s) incomplete — see details below.`, 'warning');
     } else {
-      showStatus(`Loaded ${countSummary}. ${boardDetails}`, 'success');
+      showStatus(`Loaded ${countSummary} from ${selectedBoards.length} boards`, 'success');
     }
 
     renderPins();
@@ -688,10 +686,39 @@ function renderAll() {
     el('usernameInput').value = currentProfile;
     renderBoards();
     renderPins();
+    renderHarvestVerification();
     checkForResume();
   }
   applySettings();
   updateStats();
+}
+
+function renderHarvestVerification() {
+  const container = el('harvestVerification');
+  if (!container) return;
+
+  const profile = archive.profiles[currentProfile];
+  if (!profile?.lastHarvest?.boards?.length) {
+    container.style.display = 'none';
+    return;
+  }
+
+  const h = profile.lastHarvest;
+  const rows = h.boards.map(v => {
+    const accounted = v.scraped + (v.tombstones || 0);
+    const cls = v.match ? 'match' : 'mismatch';
+
+    let counts = `${v.scraped}`;
+    if (v.tombstones) counts += ` <span class="tombstone">+ ${v.tombstones} removed</span>`;
+    counts += ` = ${accounted}`;
+    if (v.expected != null) counts += ` of ${v.expected}`;
+
+    return `<div class="board-row"><span class="board-name">${esc(v.boardName)}</span><span class="${cls}">${counts}</span></div>`;
+  }).join('');
+
+  const ts = timeAgo(new Date(h.timestamp).getTime());
+  container.innerHTML = `<div style="margin-bottom:4px;font-weight:600;font-size:12px">Last harvest: ${h.totalPins} pins (${h.totalNew} new, ${h.totalUpdated} updated) · ${ts}</div>${rows}`;
+  container.style.display = '';
 }
 
 function renderBoards() {
