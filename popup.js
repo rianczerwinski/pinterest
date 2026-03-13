@@ -358,13 +358,11 @@ async function loadSelectedBoards() {
       }
 
       // Verification: compare scraped count vs expected
-      // Tombstones are informational only — not added to match calculation
-      // because the dedup key is unstable across virtualizer recycles
       const expected = result.boardPinCount ?? boardMeta.pinCount;
       const scraped = result.pins.length;
-      const tombstones = result.tombstones || 0;
-      const match = expected == null || scraped >= expected * 0.95;
-      verificationResults.push({ boardName, scraped, expected, match, tombstones });
+      const unavailable = result.unavailable || 0;
+      const match = expected == null || (scraped + unavailable) >= expected * 0.95;
+      verificationResults.push({ boardName, scraped, expected, match, unavailable });
 
       // Update overlay with verification data
       await sendOverlay(tab.id, 'overlay-update', {
@@ -708,8 +706,8 @@ function renderHarvestVerification() {
   const rows = h.boards.map(v => {
     const cls = v.match ? 'match' : 'mismatch';
     let counts = `${v.scraped}`;
+    if (v.unavailable) counts += ` + <span class="unavailable">${v.unavailable} unavailable</span>`;
     if (v.expected != null) counts += ` of ${v.expected}`;
-    if (v.tombstones) counts += ` <span class="tombstone">(${v.tombstones} removed)</span>`;
 
     return `<div class="board-row"><span class="board-name">${esc(v.boardName)}</span><span class="${cls}">${counts}</span></div>`;
   }).join('');

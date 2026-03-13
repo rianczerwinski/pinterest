@@ -200,7 +200,7 @@ header h1 { font-size: 16px; font-weight: 600; }
 .harvest-verification .board-name { font-weight: 500; }
 .harvest-verification .match { color: #2e7d32; }
 .harvest-verification .mismatch { color: #c62828; font-weight: 600; }
-.harvest-verification .tombstone { color: #6a6a6a; font-style: italic; }
+.harvest-verification .unavailable { color: #6a6a6a; font-style: italic; }
 
 .resume-banner {
   display: flex; align-items: center; gap: 8px;

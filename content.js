@@ -430,7 +430,7 @@ async function extractPins(options = {}) {
   // so pins scrolled past get removed from the DOM. We must harvest each batch
   // before scrolling further.
   const seenIds = new Set();
-  const seenTombstones = new Set(); // pin-grid elements with no valid /pin/ link (removed pins)
+  const seenUnavailable = new Set();
   const pins = [];
 
   function harvestCurrentPins() {
@@ -438,14 +438,14 @@ async function extractPins(options = {}) {
     for (const [index, el] of [...pinElements].entries()) {
       try {
         const pin = extractPinData(el, index);
-        if (pin && pin.id && !seenIds.has(pin.id)) {
+        if (!pin) continue;
+        if (pin.unavailable) {
+          seenUnavailable.add(pin.id);
+          continue;
+        }
+        if (pin.id && !seenIds.has(pin.id)) {
           seenIds.add(pin.id);
           pins.push(pin);
-        } else if (!pin) {
-          // Tombstone: matched pin grid selector but extractPinData returned null
-          // (no valid /pin/ link). These are removed/unavailable pins.
-          const key = el.textContent?.trim().substring(0, 80) || `pos-${index}`;
-          seenTombstones.add(key);
         }
       } catch (err) {
         console.warn('Pin extraction failed for element:', err);
@@ -480,9 +480,9 @@ async function extractPins(options = {}) {
   // Sample the board page's own pin count for verification
   const boardPinCount = extractBoardPagePinCount();
 
-  const tombstones = seenTombstones.size;
-  console.log(`[Pinterest Pin DL] extractPins: ${pins.length} unique pins collected (${seenIds.size} seen, ${tombstones} tombstones)`);
-  return { success: true, pins, scrolledPins: pins.length, boardPinCount, tombstones };
+  const unavailable = seenUnavailable.size;
+  console.log(`[Pinterest Pin DL] extractPins: ${pins.length} unique pins collected (${seenIds.size} seen, ${unavailable} unavailable)`);
+  return { success: true, pins, scrolledPins: pins.length, boardPinCount, unavailable };
 }
 
 // Passive mode: user scrolls manually while we watch for pins via MutationObserver.
@@ -574,6 +574,12 @@ function extractPinData(element, index) {
     pinId = match ? match[1] : null;
   }
   if (!pinId) return null; // Skip elements without a real pin ID
+
+  // Unavailable pins have data-test-id="unavailable-pin" — they still have a /pin/ href
+  // but no image. Detect early and return minimal object for counting.
+  if (element.querySelector('[data-test-id="unavailable-pin"]')) {
+    return { id: pinId, unavailable: true };
+  }
 
   const img = element.querySelector('img');
   const imageUrl = img ? (img.getAttribute('src') || img.getAttribute('data-src')) : null;
