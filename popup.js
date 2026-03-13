@@ -1,5 +1,5 @@
 // ── Archive state ─────────────────────────────────────────
-// v2 archive: pins keyed by ID, boards under profiles, download checkpoints.
+// v2 archive: pins keyed by ID, boards under profiles, download tracking.
 
 const ARCHIVE_VERSION = 2;
 
@@ -38,6 +38,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Start fresh — no pins selected on load
     for (const pin of Object.values(archive.pins)) pin.selected = false;
     initEventListeners();
+    initPinListDelegation();
     refreshTabStatus();
     renderAll();
   });
@@ -546,8 +547,7 @@ async function downloadSelected() {
 }
 
 async function resumeDownload() {
-  if (!archive.downloads?.checkpoint) return;
-  const cp = archive.downloads.checkpoint;
+  if (!archive.downloads) return;
   const pins = Object.values(archive.pins)
     .filter(p => p.profile === currentProfile && p.selected && !p.downloaded);
   if (pins.length === 0) { showStatus('Nothing to resume', 'info'); clearResume(); return; }
@@ -555,9 +555,7 @@ async function resumeDownload() {
 }
 
 function clearResume() {
-  if (archive.downloads) {
-    archive.downloads.checkpoint = null;
-  }
+  if (archive.downloads) archive.downloads = null;
   el('resumeBanner').style.display = 'none';
   saveState();
 }
@@ -578,7 +576,6 @@ async function runDownload(pins) {
 
   archive.downloads = {
     lastRun: new Date().toISOString(),
-    checkpoint: null,
     completed: 0,
     failed: 0,
     total: pins.length,
@@ -589,9 +586,6 @@ async function runDownload(pins) {
   for (let i = 0; i < pins.length; i += downloadSettings.batchSize) {
     const batch = pins.slice(i, i + downloadSettings.batchSize);
     downloadState.currentBatch++;
-
-    // Save checkpoint before each batch
-    archive.downloads.checkpoint = { pinIndex: i };
     saveState();
 
     for (const pin of batch) {
@@ -620,7 +614,6 @@ async function runDownload(pins) {
 
   // Done
   downloadState.isDownloading = false;
-  archive.downloads.checkpoint = null;
   el('downloadSelectedBtn').disabled = false;
   saveState();
   renderPins();
@@ -841,82 +834,78 @@ function pinHTML(pin) {
 
 const PLACEHOLDER_SVG = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2260%22 height=%2260%22%3E%3Crect fill=%22%23ddd%22 width=%2260%22 height=%2260%22/%3E%3C/svg%3E';
 
-function attachPinListeners() {
-  // Collapse/expand board groups
-  el('pinsList').querySelectorAll('.board-header').forEach(header => {
-    header.addEventListener('click', () => {
+// Event delegation — registered once, handles all pin list interactions
+function initPinListDelegation() {
+  el('pinsList').addEventListener('click', e => {
+    // Board header collapse/expand
+    const header = e.target.closest('.board-header');
+    if (header && !e.target.closest('.board-select-all-btn') && !e.target.closest('.board-deselect-all-btn')) {
       const collapsed = header.dataset.collapsed === 'true';
       header.dataset.collapsed = collapsed ? 'false' : 'true';
-      const pinsList = header.nextElementSibling;
-      pinsList.style.display = collapsed ? '' : 'none';
+      header.nextElementSibling.style.display = collapsed ? '' : 'none';
       header.querySelector('.board-chevron').textContent = collapsed ? '▼' : '▶';
-    });
-  });
-
-  // Per-board select / deselect buttons
-  el('pinsList').querySelectorAll('.board-group').forEach(group => {
-    const selectBtn = group.querySelector('.board-select-all-btn');
-    const deselectBtn = group.querySelector('.board-deselect-all-btn');
-
-    function updateBoardButtons() {
-      const checkboxes = [...group.querySelectorAll('.pin-checkbox')];
-      const allChecked = checkboxes.length > 0 && checkboxes.every(cb => cb.checked);
-      const noneChecked = checkboxes.every(cb => !cb.checked);
-      selectBtn.disabled = allChecked;
-      selectBtn.textContent = allChecked ? 'All Selected' : 'Select All';
-      deselectBtn.disabled = noneChecked;
-      deselectBtn.textContent = noneChecked ? 'None Selected' : 'Deselect All';
+      return;
     }
 
-    function setBoardPins(value) {
+    // Per-board Select All / Deselect All
+    const selectAllBtn = e.target.closest('.board-select-all-btn');
+    const deselectAllBtn = e.target.closest('.board-deselect-all-btn');
+    if (selectAllBtn || deselectAllBtn) {
+      e.stopPropagation();
+      const group = e.target.closest('.board-group');
+      const value = !!selectAllBtn;
       group.querySelectorAll('.pin-item').forEach(item => {
         const pinId = item.dataset.pinId;
         if (archive.pins[pinId]) archive.pins[pinId].selected = value;
         item.querySelector('.pin-checkbox').checked = value;
       });
-      updateBoardButtons();
+      updateBoardButtons(group);
       triggerAutosave();
       updateStats();
+      return;
     }
 
-    selectBtn.addEventListener('click', e => { e.stopPropagation(); setBoardPins(true); });
-    deselectBtn.addEventListener('click', e => { e.stopPropagation(); setBoardPins(false); });
+    // View button
+    const viewBtn = e.target.closest('.view-btn');
+    if (viewBtn) {
+      const url = viewBtn.dataset.url;
+      if (url) chrome.tabs.create({ url });
+      return;
+    }
   });
 
-  el('pinsList').querySelectorAll('.pin-thumbnail').forEach(img => {
-    img.addEventListener('error', () => { img.src = PLACEHOLDER_SVG; }, { once: true });
-  });
-
-  el('pinsList').querySelectorAll('.pin-checkbox').forEach(cb => {
-    cb.addEventListener('change', e => {
+  el('pinsList').addEventListener('change', e => {
+    // Pin checkbox
+    if (e.target.classList.contains('pin-checkbox')) {
       const pinItem = e.target.closest('.pin-item');
-      const pinId = pinItem.dataset.pinId;
-      if (archive.pins[pinId]) {
+      const pinId = pinItem?.dataset.pinId;
+      if (pinId && archive.pins[pinId]) {
         archive.pins[pinId].selected = e.target.checked;
         triggerAutosave();
         updateStats();
-        // Update per-board button states
         const group = pinItem.closest('.board-group');
-        if (group) {
-          const checkboxes = [...group.querySelectorAll('.pin-checkbox')];
-          const allChecked = checkboxes.length > 0 && checkboxes.every(c => c.checked);
-          const noneChecked = checkboxes.every(c => !c.checked);
-          const selBtn = group.querySelector('.board-select-all-btn');
-          const deselBtn = group.querySelector('.board-deselect-all-btn');
-          selBtn.disabled = allChecked;
-          selBtn.textContent = allChecked ? 'All Selected' : 'Select All';
-          deselBtn.disabled = noneChecked;
-          deselBtn.textContent = noneChecked ? 'None Selected' : 'Deselect All';
-        }
+        if (group) updateBoardButtons(group);
       }
-    });
+    }
   });
+}
 
-  el('pinsList').querySelectorAll('.view-btn').forEach(btn => {
-    btn.addEventListener('click', e => {
-      const url = e.target.dataset.url;
-      if (url) chrome.tabs.create({ url });
-    });
+function updateBoardButtons(group) {
+  const checkboxes = [...group.querySelectorAll('.pin-checkbox')];
+  const allChecked = checkboxes.length > 0 && checkboxes.every(c => c.checked);
+  const noneChecked = checkboxes.every(c => !c.checked);
+  const selBtn = group.querySelector('.board-select-all-btn');
+  const deselBtn = group.querySelector('.board-deselect-all-btn');
+  selBtn.disabled = allChecked;
+  selBtn.textContent = allChecked ? 'All Selected' : 'Select All';
+  deselBtn.disabled = noneChecked;
+  deselBtn.textContent = noneChecked ? 'None Selected' : 'Deselect All';
+}
+
+function attachPinListeners() {
+  // Thumbnail error fallback — must be per-element (error events don't bubble)
+  el('pinsList').querySelectorAll('.pin-thumbnail').forEach(img => {
+    img.addEventListener('error', () => { img.src = PLACEHOLDER_SVG; }, { once: true });
   });
 }
 
@@ -937,7 +926,7 @@ function updateDownloadProgress() {
 }
 
 function checkForResume() {
-  if (archive.downloads?.checkpoint) {
+  if (archive.downloads && (archive.downloads.completed + archive.downloads.failed) < archive.downloads.total) {
     const remaining = archive.downloads.total - archive.downloads.completed - archive.downloads.failed;
     el('resumeBanner').style.display = '';
     el('resumeText').textContent = `Interrupted download: ${remaining} of ${archive.downloads.total} remaining`;

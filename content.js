@@ -4,6 +4,12 @@
 
 console.log('Pinterest Pin Downloader content script loaded');
 
+// Pinterest system paths that look like board slugs but aren't
+const SKIP_SLUGS = new Set([
+  'pins', '_saved', '_created', '_drafts', 'followers', 'following',
+  'settings', 'topics', 'ideas', 'tried'
+]);
+
 // ── Floating progress overlay ────────────────────────────
 
 let overlayEl = null;
@@ -241,11 +247,6 @@ async function extractBoards() {
 
   const boards = [];
   const seen = new Set();
-  const skipSlugs = new Set([
-    'pins', '_saved', '_created', '_drafts', 'followers', 'following',
-    'settings', 'topics', 'ideas', 'tried'
-  ]);
-
   // Strategy 1: find board links by URL pattern /{username}/{slug}/
   const links = document.querySelectorAll('a[href]');
   for (const link of links) {
@@ -262,7 +263,7 @@ async function extractBoards() {
     const [, linkUser, boardSlug] = boardMatch;
     // Must match the profile username (or the username we navigated to)
     if (username && linkUser !== username) continue;
-    if (skipSlugs.has(boardSlug)) continue;
+    if (SKIP_SLUGS.has(boardSlug)) continue;
 
     const url = `/${linkUser}/${boardSlug}/`;
     if (seen.has(url)) continue;
@@ -301,75 +302,6 @@ async function extractBoards() {
     boards.map(b => `${b.name} (${b.url}, ${b.pinCount ?? '?'} pins)`));
 
   return { success: true, boards };
-}
-
-/** Fetch boards using Pinterest's internal API endpoint */
-async function fetchBoardsViaAPI(username) {
-  // Pinterest's internal API — the content script runs on pinterest.com
-  // so we have the user's cookies for authentication
-  const url = `https://www.pinterest.com/resource/BoardsResource/get/`;
-  const params = new URLSearchParams({
-    source_url: `/${username}/`,
-    data: JSON.stringify({
-      options: {
-        username,
-        page_size: 100,
-        privacy_filter: 'all',
-        sort: 'custom',
-        field_set_key: 'profile_grid_item',
-        filter_section_pins: true,
-        section_id: null,
-        project_id: null,
-      },
-      context: {},
-    }),
-    _: Date.now().toString(),
-  });
-
-  const resp = await fetch(`${url}?${params}`, {
-    headers: {
-      'Accept': 'application/json',
-      'X-Requested-With': 'XMLHttpRequest',
-    },
-    credentials: 'include',
-  });
-
-  if (!resp.ok) throw new Error(`API returned ${resp.status}`);
-
-  const data = await resp.json();
-  const items = data?.resource_response?.data || [];
-
-  return items.map(board => ({
-    name: board.name || 'Untitled Board',
-    url: board.url || `/${username}/${board.slug || board.id}/`,
-    coverImage: board.image_cover_url
-      || board.images?.['170x']?.url
-      || board.cover_images?.[0]?.url
-      || null,
-    pinCount: board.pin_count ?? null,
-  }));
-}
-
-function parseBoardCard(card) {
-  const link = card.querySelector('a[href]');
-  if (!link) return null;
-
-  const href = link.getAttribute('href');
-  if (!href || href.includes('/pin/') || href.includes('/pins/')) return null;
-
-  const name = card.querySelector('[data-test-id="board-name"], [class*="boardName"], h3, h4')?.textContent?.trim()
-    || link.getAttribute('aria-label')?.trim()
-    || decodeURIComponent(href.split('/').filter(Boolean).pop() || '').replace(/-/g, ' ');
-
-  const coverImg = card.querySelector('img');
-  const pinCount = extractPinCount(card);
-
-  return {
-    name,
-    url: href.endsWith('/') ? href : href + '/',
-    coverImage: coverImg?.src || null,
-    pinCount,
-  };
 }
 
 function extractBoardNameFromCard(link, container) {
@@ -774,11 +706,6 @@ function waitForNewContent(timeout) {
 
 /** Scroll the profile page to load all boards (Pinterest lazy-loads them) */
 async function scrollToLoadAllBoards(username) {
-  const skipSlugs = new Set([
-    'pins', '_saved', '_created', '_drafts', 'followers', 'following',
-    'settings', 'topics', 'ideas', 'tried'
-  ]);
-
   function countBoardLinks() {
     let count = 0;
     for (const link of document.querySelectorAll('a[href]')) {
@@ -787,7 +714,7 @@ async function scrollToLoadAllBoards(username) {
       const m = href.match(/^\/([^/]+)\/([^/]+)\/?$/);
       if (!m) continue;
       if (username && m[1] !== username) continue;
-      if (skipSlugs.has(m[2])) continue;
+      if (SKIP_SLUGS.has(m[2])) continue;
       count++;
     }
     return count;
@@ -832,7 +759,7 @@ function waitForBoardContent(username, timeout = 15000) {
         if (!m) continue;
         if (username && m[1] !== username) continue;
         const slug = m[2];
-        if (['pins', '_saved', '_created', '_drafts', 'followers', 'following', 'settings', 'topics', 'ideas', 'tried'].includes(slug)) continue;
+        if (SKIP_SLUGS.has(slug)) continue;
         boardLinkCount++;
       }
 
