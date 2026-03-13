@@ -448,7 +448,17 @@ async function extractPins(options = {}) {
         const pin = extractPinData(el, index);
         if (!pin) {
           if (slot != null && !nullReturns.has(slot)) {
-            nullReturns.set(slot, el.outerHTML?.substring(0, 300) || '(no outerHTML)');
+            const allLinks = [...el.querySelectorAll('a[href]')].map(a => a.getAttribute('href'));
+            const testIds = [...el.querySelectorAll('[data-test-id]')].map(e => e.getAttribute('data-test-id'));
+            const hasImg = !!el.querySelector('img');
+            nullReturns.set(slot, {
+              html: el.outerHTML?.substring(0, 1500) || '(no outerHTML)',
+              links: allLinks,
+              testIds,
+              hasImg,
+              height: el.style?.height || el.offsetHeight,
+              classes: el.className,
+            });
           }
           continue;
         }
@@ -511,8 +521,15 @@ async function extractPins(options = {}) {
       console.log(`[Pinterest Pin DL] DIAG: missing slots: ${missingSlots.join(', ')}`);
     }
     if (nullReturns.size > 0) {
-      for (const [s, html] of nullReturns) {
-        console.log(`[Pinterest Pin DL] DIAG: null return at slot ${s}: ${html}`);
+      for (const [s, info] of nullReturns) {
+        console.log(`[Pinterest Pin DL] DIAG: null return at slot ${s}:`, {
+          links: info.links,
+          testIds: info.testIds,
+          hasImg: info.hasImg,
+          height: info.height,
+          classes: info.classes,
+        });
+        console.log(`[Pinterest Pin DL] DIAG: slot ${s} HTML:`, info.html);
       }
     }
     if (exceptions.length > 0) {
