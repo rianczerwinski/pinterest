@@ -444,10 +444,13 @@ async function loadSelectedBoards() {
 
     // Per-board breakdown: always shown so the user can verify completeness
     const boardDetails = verificationResults.map(v => {
-      const parts = [`${v.boardName}: ${v.scraped}/${v.expected ?? '?'}`];
-      if (v.tombstones) parts.push(`+${v.tombstones} removed`);
-      if (!v.match) parts.push('⚠');
-      return parts.join(' ');
+      const accounted = v.scraped + (v.tombstones || 0);
+      let detail = `${v.boardName}: ${v.scraped}`;
+      if (v.tombstones) detail += ` + ${v.tombstones} removed`;
+      detail += ` = ${accounted}`;
+      if (v.expected != null) detail += ` of ${v.expected}`;
+      if (!v.match) detail += ' ⚠';
+      return detail;
     }).join(', ');
 
     if (mismatches.length > 0) {
