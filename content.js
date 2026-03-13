@@ -430,6 +430,7 @@ async function extractPins(options = {}) {
   // so pins scrolled past get removed from the DOM. We must harvest each batch
   // before scrolling further.
   const seenIds = new Set();
+  const seenTombstones = new Set(); // pin-grid elements with no valid /pin/ link (removed pins)
   const pins = [];
 
   function harvestCurrentPins() {
@@ -440,6 +441,11 @@ async function extractPins(options = {}) {
         if (pin && pin.id && !seenIds.has(pin.id)) {
           seenIds.add(pin.id);
           pins.push(pin);
+        } else if (!pin) {
+          // Tombstone: matched pin grid selector but extractPinData returned null
+          // (no valid /pin/ link). These are removed/unavailable pins.
+          const key = el.textContent?.trim().substring(0, 80) || `pos-${index}`;
+          seenTombstones.add(key);
         }
       } catch (err) {
         console.warn('Pin extraction failed for element:', err);
@@ -474,8 +480,9 @@ async function extractPins(options = {}) {
   // Sample the board page's own pin count for verification
   const boardPinCount = extractBoardPagePinCount();
 
-  console.log(`[Pinterest Pin DL] extractPins: ${pins.length} unique pins collected (${seenIds.size} seen)`);
-  return { success: true, pins, scrolledPins: pins.length, boardPinCount };
+  const tombstones = seenTombstones.size;
+  console.log(`[Pinterest Pin DL] extractPins: ${pins.length} unique pins collected (${seenIds.size} seen, ${tombstones} tombstones)`);
+  return { success: true, pins, scrolledPins: pins.length, boardPinCount, tombstones };
 }
 
 // Passive mode: user scrolls manually while we watch for pins via MutationObserver.
@@ -717,13 +724,17 @@ async function scrollAndLoadMore(maxScrolls = 300, onNewContent = null) {
   let sameCountIterations = 0;
   const step = Math.floor(window.innerHeight * 0.5);
 
+  // Continuous harvest interval — pins only need to exist in the DOM for one
+  // 150ms tick to be captured, regardless of scroll speed.
+  const harvestInterval = onNewContent ? setInterval(onNewContent, 150) : null;
+
   while (scrollCount < maxScrolls) {
     if (overlayState.cancelled || overlayState.skipBoard) break;
 
     window.scrollBy(0, step);
     await waitForNewContent(1000);
 
-    // Harvest pins before they get virtualized away
+    // Explicit harvest after each scroll step (supplements the interval)
     const harvested = onNewContent ? onNewContent() : 0;
 
     // Stability check uses harvested (cumulative) count, not DOM count
@@ -752,6 +763,7 @@ async function scrollAndLoadMore(maxScrolls = 300, onNewContent = null) {
     if (atBottom && sameCountIterations >= 3) break;
   }
 
+  if (harvestInterval) clearInterval(harvestInterval);
   window.scrollTo(0, 0);
   return lastHarvestedCount;
 }

@@ -357,11 +357,13 @@ async function loadSelectedBoards() {
         continue;
       }
 
-      // Verification: compare scraped count vs expected
+      // Verification: compare scraped count vs expected (tombstones explain the gap)
       const expected = result.boardPinCount ?? boardMeta.pinCount;
       const scraped = result.pins.length;
-      const match = expected == null || scraped >= expected * 0.95;
-      verificationResults.push({ boardName, scraped, expected, match });
+      const tombstones = result.tombstones || 0;
+      const effectiveCount = scraped + tombstones;
+      const match = expected == null || effectiveCount >= expected * 0.95;
+      verificationResults.push({ boardName, scraped, expected, match, tombstones });
 
       // Update overlay with verification data
       await sendOverlay(tab.id, 'overlay-update', {
@@ -435,14 +437,19 @@ async function loadSelectedBoards() {
       showDiff(newPinIds.size, totalPins);
     }
 
-    // Show verification summary — flag mismatches
+    // Show verification summary — flag mismatches, note tombstones
+    const totalTombstones = verificationResults.reduce((sum, v) => sum + (v.tombstones || 0), 0);
     const mismatches = verificationResults.filter(v => !v.match);
     const countSummary = `${totalPins} pins (${totalNew} new, ${totalUpdated} updated)`;
+    const tombstoneNote = totalTombstones > 0 ? ` (${totalTombstones} removed/unavailable)` : '';
     if (mismatches.length > 0) {
-      const details = mismatches.map(m => `${m.boardName}: ${m.scraped}/${m.expected ?? '?'}`).join(', ');
-      showStatus(`Loaded ${countSummary}. ⚠ Incomplete boards: ${details}`, 'warning');
+      const details = mismatches.map(m => {
+        const t = m.tombstones ? ` +${m.tombstones} removed` : '';
+        return `${m.boardName}: ${m.scraped}/${m.expected ?? '?'}${t}`;
+      }).join(', ');
+      showStatus(`Loaded ${countSummary}${tombstoneNote}. ⚠ Incomplete boards: ${details}`, 'warning');
     } else {
-      showStatus(`Loaded ${countSummary} from ${selectedBoards.length} boards`, 'success');
+      showStatus(`Loaded ${countSummary}${tombstoneNote} from ${selectedBoards.length} boards`, 'success');
     }
 
     renderPins();
