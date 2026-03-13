@@ -625,7 +625,8 @@ function extractPinData(element, index) {
 
   let pinId = null;
   if (href) {
-    const match = href.match(/\/pin\/(\d+)/);
+    // Pinterest uses both numeric (123456) and alphanumeric (AcVWjI...) pin IDs
+    const match = href.match(/\/pin\/([A-Za-z0-9]+)/);
     pinId = match ? match[1] : null;
   }
   if (!pinId) return null; // Skip elements without a real pin ID
