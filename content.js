@@ -431,14 +431,27 @@ async function extractPins(options = {}) {
   // before scrolling further.
   const seenIds = new Set();
   const seenUnavailable = new Set();
+  const seenSlots = new Set();
+  const nullReturns = new Map();
+  const exceptions = [];
   const pins = [];
 
   function harvestCurrentPins() {
     const pinElements = document.querySelectorAll(PIN_SELECTORS);
     for (const [index, el] of [...pinElements].entries()) {
+      // Track slot index — on [data-test-id="pin"] element or its descendants
+      const slot = el.getAttribute?.('data-test-pin-slot-index')
+        ?? el.querySelector?.('[data-test-pin-slot-index]')?.getAttribute('data-test-pin-slot-index');
+      if (slot != null) seenSlots.add(Number(slot));
+
       try {
         const pin = extractPinData(el, index);
-        if (!pin) continue;
+        if (!pin) {
+          if (slot != null && !nullReturns.has(slot)) {
+            nullReturns.set(slot, el.outerHTML?.substring(0, 300) || '(no outerHTML)');
+          }
+          continue;
+        }
         if (pin.unavailable) {
           seenUnavailable.add(pin.id);
           continue;
@@ -449,6 +462,7 @@ async function extractPins(options = {}) {
         }
       } catch (err) {
         console.warn('Pin extraction failed for element:', err);
+        exceptions.push({ slot, error: err.message });
       }
     }
   }
@@ -482,6 +496,30 @@ async function extractPins(options = {}) {
 
   const unavailable = seenUnavailable.size;
   console.log(`[Pinterest Pin DL] extractPins: ${pins.length} unique pins collected (${seenIds.size} seen, ${unavailable} unavailable)`);
+
+  // Diagnostic: account for every slot the virtualizer rendered
+  if (seenSlots.size > 0) {
+    const maxSlot = Math.max(...seenSlots);
+    const missingSlots = [];
+    for (let i = 0; i <= maxSlot; i++) {
+      if (!seenSlots.has(i)) missingSlots.push(i);
+    }
+    console.log(`[Pinterest Pin DL] DIAG: ${seenSlots.size} slots seen (0..${maxSlot}), ` +
+      `${pins.length} captured, ${unavailable} unavailable, ` +
+      `${nullReturns.size} null returns, ${exceptions.length} exceptions`);
+    if (missingSlots.length > 0) {
+      console.log(`[Pinterest Pin DL] DIAG: missing slots: ${missingSlots.join(', ')}`);
+    }
+    if (nullReturns.size > 0) {
+      for (const [s, html] of nullReturns) {
+        console.log(`[Pinterest Pin DL] DIAG: null return at slot ${s}: ${html}`);
+      }
+    }
+    if (exceptions.length > 0) {
+      console.log(`[Pinterest Pin DL] DIAG: exceptions:`, exceptions);
+    }
+  }
+
   return { success: true, pins, scrolledPins: pins.length, boardPinCount, unavailable };
 }
 
