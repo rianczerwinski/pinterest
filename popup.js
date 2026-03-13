@@ -62,6 +62,7 @@ function initEventListeners() {
   // Pins
   el('selectAllPinsBtn').addEventListener('click', () => setAllPinSelections(true));
   el('deselectAllPinsBtn').addEventListener('click', () => setAllPinSelections(false));
+  el('resetDownloadsBtn').addEventListener('click', resetDownloads);
   el('downloadSelectedBtn').addEventListener('click', downloadSelected);
   el('searchInput').addEventListener('input', debounce(renderPins, 300));
   el('filterSelect').addEventListener('change', renderPins);
@@ -956,6 +957,23 @@ function setAllPinSelections(value) {
   for (const pin of getVisiblePins()) pin.selected = value;
   triggerAutosave();
   renderPins();
+}
+
+function resetDownloads() {
+  const pins = getVisiblePins();
+  let count = 0;
+  for (const pin of pins) {
+    if (pin.downloaded) {
+      pin.downloaded = false;
+      pin.downloadPath = null;
+      pin.downloadedAt = null;
+      count++;
+    }
+  }
+  if (count === 0) { showStatus('No downloaded pins to reset', 'info'); return; }
+  saveState();
+  renderPins();
+  showStatus(`Reset ${count} pins to un-downloaded`, 'success');
 }
 
 // ── Persistence ───────────────────────────────────────────
