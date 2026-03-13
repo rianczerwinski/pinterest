@@ -431,37 +431,14 @@ async function extractPins(options = {}) {
   // before scrolling further.
   const seenIds = new Set();
   const seenUnavailable = new Set();
-  const seenSlots = new Set();
-  const nullReturns = new Map();
-  const exceptions = [];
   const pins = [];
 
   function harvestCurrentPins() {
     const pinElements = document.querySelectorAll(PIN_SELECTORS);
     for (const [index, el] of [...pinElements].entries()) {
-      // Track slot index — on [data-test-id="pin"] element or its descendants
-      const slot = el.getAttribute?.('data-test-pin-slot-index')
-        ?? el.querySelector?.('[data-test-pin-slot-index]')?.getAttribute('data-test-pin-slot-index');
-      if (slot != null) seenSlots.add(Number(slot));
-
       try {
         const pin = extractPinData(el, index);
-        if (!pin) {
-          if (slot != null && !nullReturns.has(slot)) {
-            const allLinks = [...el.querySelectorAll('a[href]')].map(a => a.getAttribute('href'));
-            const testIds = [...el.querySelectorAll('[data-test-id]')].map(e => e.getAttribute('data-test-id'));
-            const hasImg = !!el.querySelector('img');
-            nullReturns.set(slot, {
-              html: el.outerHTML?.substring(0, 1500) || '(no outerHTML)',
-              links: allLinks,
-              testIds,
-              hasImg,
-              height: el.style?.height || el.offsetHeight,
-              classes: el.className,
-            });
-          }
-          continue;
-        }
+        if (!pin) continue;
         if (pin.unavailable) {
           seenUnavailable.add(pin.id);
           continue;
@@ -472,7 +449,6 @@ async function extractPins(options = {}) {
         }
       } catch (err) {
         console.warn('Pin extraction failed for element:', err);
-        exceptions.push({ slot, error: err.message });
       }
     }
   }
@@ -506,37 +482,6 @@ async function extractPins(options = {}) {
 
   const unavailable = seenUnavailable.size;
   console.log(`[Pinterest Pin DL] extractPins: ${pins.length} unique pins collected (${seenIds.size} seen, ${unavailable} unavailable)`);
-
-  // Diagnostic: account for every slot the virtualizer rendered
-  if (seenSlots.size > 0) {
-    const maxSlot = Math.max(...seenSlots);
-    const missingSlots = [];
-    for (let i = 0; i <= maxSlot; i++) {
-      if (!seenSlots.has(i)) missingSlots.push(i);
-    }
-    console.log(`[Pinterest Pin DL] DIAG: ${seenSlots.size} slots seen (0..${maxSlot}), ` +
-      `${pins.length} captured, ${unavailable} unavailable, ` +
-      `${nullReturns.size} null returns, ${exceptions.length} exceptions`);
-    if (missingSlots.length > 0) {
-      console.log(`[Pinterest Pin DL] DIAG: missing slots: ${missingSlots.join(', ')}`);
-    }
-    if (nullReturns.size > 0) {
-      for (const [s, info] of nullReturns) {
-        console.log(`[Pinterest Pin DL] DIAG: null return at slot ${s}:`, {
-          links: info.links,
-          testIds: info.testIds,
-          hasImg: info.hasImg,
-          height: info.height,
-          classes: info.classes,
-        });
-        console.log(`[Pinterest Pin DL] DIAG: slot ${s} HTML:`, info.html);
-      }
-    }
-    if (exceptions.length > 0) {
-      console.log(`[Pinterest Pin DL] DIAG: exceptions:`, exceptions);
-    }
-  }
-
   return { success: true, pins, scrolledPins: pins.length, boardPinCount, unavailable };
 }
 
@@ -777,14 +722,14 @@ function countPinElements() {
   return document.querySelectorAll(PIN_SELECTORS).length;
 }
 
-// Gentle scroll: 50% viewport per step so Pinterest's virtualizer keeps pins in
-// the DOM long enough to harvest. Previous approach jumped to scrollHeight which
-// outraced the virtualizer and missed pins in the middle of the grid.
+// Gentle scroll with jitter: 40-60% viewport per step, randomized wait between
+// steps, occasional "reading" pauses. Prevents bot-detection fingerprinting while
+// keeping pins in the DOM long enough for the harvest interval to capture them.
 async function scrollAndLoadMore(maxScrolls = 300, onNewContent = null) {
   let scrollCount = 0;
   let lastHarvestedCount = 0;
   let sameCountIterations = 0;
-  const step = Math.floor(window.innerHeight * 0.5);
+  const nextPauseAt = 15 + Math.floor(Math.random() * 11); // pause every 15-25 scrolls
 
   // Continuous harvest interval — pins only need to exist in the DOM for one
   // 150ms tick to be captured, regardless of scroll speed.
@@ -793,8 +738,15 @@ async function scrollAndLoadMore(maxScrolls = 300, onNewContent = null) {
   while (scrollCount < maxScrolls) {
     if (overlayState.cancelled || overlayState.skipBoard) break;
 
+    // Jittered step: 40-60% of viewport height per scroll
+    const step = Math.floor(window.innerHeight * (0.4 + Math.random() * 0.2));
     window.scrollBy(0, step);
-    await waitForNewContent(1000);
+    await waitForNewContent(800 + Math.floor(Math.random() * 600));
+
+    // Occasional micro-pause to simulate human stopping to look at pins
+    if (scrollCount > 0 && scrollCount % nextPauseAt === 0) {
+      await new Promise(r => setTimeout(r, 2000 + Math.floor(Math.random() * 3000)));
+    }
 
     // Explicit harvest after each scroll step (supplements the interval)
     const harvested = onNewContent ? onNewContent() : 0;
@@ -889,7 +841,7 @@ async function scrollToLoadAllBoards(username) {
 
   for (let i = 0; i < maxScrolls; i++) {
     window.scrollTo(0, document.body.scrollHeight);
-    await new Promise(r => setTimeout(r, 1200));
+    await new Promise(r => setTimeout(r, 900 + Math.floor(Math.random() * 900)));
 
     const current = countBoardLinks();
     if (current === lastCount) {
@@ -928,7 +880,7 @@ function waitForBoardContent(username, timeout = 15000) {
 
       if (boardLinkCount > 0) {
         // Found board links — wait a bit more for images to load
-        setTimeout(resolve, 1000);
+        setTimeout(resolve, 700 + Math.floor(Math.random() * 600));
       } else if (Date.now() - start > timeout) {
         resolve(); // timeout — proceed with whatever we have
       } else {
