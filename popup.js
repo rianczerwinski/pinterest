@@ -357,12 +357,13 @@ async function loadSelectedBoards() {
         continue;
       }
 
-      // Verification: compare scraped count vs expected (tombstones explain the gap)
+      // Verification: compare scraped count vs expected
+      // Tombstones are informational only — not added to match calculation
+      // because the dedup key is unstable across virtualizer recycles
       const expected = result.boardPinCount ?? boardMeta.pinCount;
       const scraped = result.pins.length;
       const tombstones = result.tombstones || 0;
-      const effectiveCount = scraped + tombstones;
-      const match = expected == null || effectiveCount >= expected * 0.95;
+      const match = expected == null || scraped >= expected * 0.95;
       verificationResults.push({ boardName, scraped, expected, match, tombstones });
 
       // Update overlay with verification data
@@ -705,13 +706,10 @@ function renderHarvestVerification() {
 
   const h = profile.lastHarvest;
   const rows = h.boards.map(v => {
-    const accounted = v.scraped + (v.tombstones || 0);
     const cls = v.match ? 'match' : 'mismatch';
-
     let counts = `${v.scraped}`;
-    if (v.tombstones) counts += ` <span class="tombstone">+ ${v.tombstones} removed</span>`;
-    counts += ` = ${accounted}`;
     if (v.expected != null) counts += ` of ${v.expected}`;
+    if (v.tombstones) counts += ` <span class="tombstone">(${v.tombstones} removed)</span>`;
 
     return `<div class="board-row"><span class="board-name">${esc(v.boardName)}</span><span class="${cls}">${counts}</span></div>`;
   }).join('');
