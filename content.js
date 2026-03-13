@@ -431,6 +431,7 @@ async function extractPins(options = {}) {
   // before scrolling further.
   const seenIds = new Set();
   const seenUnavailable = new Set();
+  let unrecognizedElements = 0;
   const pins = [];
 
   function harvestCurrentPins() {
@@ -438,7 +439,7 @@ async function extractPins(options = {}) {
     for (const [index, el] of [...pinElements].entries()) {
       try {
         const pin = extractPinData(el, index);
-        if (!pin) continue;
+        if (!pin) { unrecognizedElements++; continue; }
         if (pin.unavailable) {
           seenUnavailable.add(pin.id);
           continue;
@@ -453,18 +454,34 @@ async function extractPins(options = {}) {
     }
   }
 
+  // Sample the board page's own pin count early — used for adaptive scroll
+  // threshold and multi-pass decision
+  const boardPinCount = extractBoardPagePinCount();
+
   // Harvest initial batch
   harvestCurrentPins();
 
   // Scroll and harvest incrementally — callback returns cumulative count
   // so the scroll loop can track progress and detect stability
-  await scrollAndLoadMore(maxScrolls, () => {
-    harvestCurrentPins();
-    return seenIds.size;
-  });
+  const harvestCallback = () => { harvestCurrentPins(); return seenIds.size; };
+  await scrollAndLoadMore(maxScrolls, harvestCallback, boardPinCount || 0);
 
-  // Final harvest after scroll completes
+  // Final harvest after first pass
   harvestCurrentPins();
+
+  // Second pass: if first pass captured < 90% of expected pins on a large board,
+  // scroll again. The seenIds set persists, so we only add genuinely new pins.
+  // Jitter + different scroll timing means the virtualizer renders different elements.
+  const totalCaptured = seenIds.size + seenUnavailable.size;
+  if (boardPinCount && boardPinCount > 100 && totalCaptured < boardPinCount * 0.9) {
+    console.log(`[Pinterest Pin DL] Pass 1: ${seenIds.size} pins + ${seenUnavailable.size} unavailable = ${totalCaptured}/${boardPinCount} (${Math.round(totalCaptured/boardPinCount*100)}%). Starting pass 2...`);
+    window.scrollTo(0, 0);
+    await new Promise(r => setTimeout(r, 1500 + Math.floor(Math.random() * 1000)));
+    await scrollAndLoadMore(maxScrolls, harvestCallback, boardPinCount);
+    harvestCurrentPins();
+    const pass2Total = seenIds.size + seenUnavailable.size;
+    console.log(`[Pinterest Pin DL] Pass 2: ${seenIds.size} pins + ${seenUnavailable.size} unavailable = ${pass2Total}/${boardPinCount} (${Math.round(pass2Total/boardPinCount*100)}%)`);
+  }
 
   // Fallback: parse from page scripts
   if (pins.length === 0) {
@@ -477,11 +494,11 @@ async function extractPins(options = {}) {
     }
   }
 
-  // Sample the board page's own pin count for verification
-  const boardPinCount = extractBoardPagePinCount();
-
   const unavailable = seenUnavailable.size;
   console.log(`[Pinterest Pin DL] extractPins: ${pins.length} unique pins collected (${seenIds.size} seen, ${unavailable} unavailable)`);
+  if (unrecognizedElements > 0) {
+    console.warn(`[Pinterest Pin DL] ${unrecognizedElements} grid elements unrecognized by extractPinData`);
+  }
   return { success: true, pins, scrolledPins: pins.length, boardPinCount, unavailable };
 }
 
@@ -491,6 +508,7 @@ async function extractPinsPassive() {
   await waitForSelector(PIN_SELECTORS, 10000);
 
   const seenIds = new Set();
+  const seenUnavailable = new Set();
   const pins = [];
 
   function harvestCurrentPins() {
@@ -498,7 +516,12 @@ async function extractPinsPassive() {
     for (const [index, el] of [...pinElements].entries()) {
       try {
         const pin = extractPinData(el, index);
-        if (pin && pin.id && !seenIds.has(pin.id)) {
+        if (!pin) continue;
+        if (pin.unavailable) {
+          seenUnavailable.add(pin.id);
+          continue;
+        }
+        if (pin.id && !seenIds.has(pin.id)) {
           seenIds.add(pin.id);
           pins.push(pin);
         }
@@ -560,8 +583,9 @@ async function extractPinsPassive() {
   if (confirmBtn) confirmBtn.textContent = 'Continue →';
 
   const boardPinCount = extractBoardPagePinCount();
-  console.log(`[Pinterest Pin DL] extractPinsPassive: ${pins.length} unique pins collected`);
-  return { success: true, pins, scrolledPins: pins.length, boardPinCount };
+  const unavailable = seenUnavailable.size;
+  console.log(`[Pinterest Pin DL] extractPinsPassive: ${pins.length} unique pins collected (${unavailable} unavailable)`);
+  return { success: true, pins, scrolledPins: pins.length, boardPinCount, unavailable };
 }
 
 function extractPinData(element, index) {
@@ -725,7 +749,7 @@ function countPinElements() {
 // Gentle scroll with jitter: 40-60% viewport per step, randomized wait between
 // steps, occasional "reading" pauses. Prevents bot-detection fingerprinting while
 // keeping pins in the DOM long enough for the harvest interval to capture them.
-async function scrollAndLoadMore(maxScrolls = 300, onNewContent = null) {
+async function scrollAndLoadMore(maxScrolls = 300, onNewContent = null, expectedCount = 0) {
   let scrollCount = 0;
   let lastHarvestedCount = 0;
   let sameCountIterations = 0;
@@ -751,11 +775,14 @@ async function scrollAndLoadMore(maxScrolls = 300, onNewContent = null) {
     // Explicit harvest after each scroll step (supplements the interval)
     const harvested = onNewContent ? onNewContent() : 0;
 
-    // Stability check uses harvested (cumulative) count, not DOM count
+    // Stability check uses harvested (cumulative) count, not DOM count.
+    // Raise threshold when we're below 90% of expected — prevents premature
+    // exit on large boards where the virtualizer has slow rendering stretches.
     if (harvested === lastHarvestedCount) {
       sameCountIterations++;
-      // Smaller scrolls hit plateaus more often — need higher threshold
-      if (sameCountIterations >= 10) break;
+      const belowTarget = expectedCount > 0 && harvested < expectedCount * 0.9;
+      const threshold = belowTarget ? 20 : 10;
+      if (sameCountIterations >= threshold) break;
     } else {
       sameCountIterations = 0;
     }
