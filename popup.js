@@ -344,7 +344,7 @@ async function loadSelectedBoards() {
       const result = await navigateAndExtract(
         tab.id,
         `https://www.pinterest.com${boardMeta.url}`,
-        'pins'
+        document.getElementById('manualScrapeToggle')?.checked ? 'pinsPassive' : 'pins'
       );
 
       if (overlayControls.skipBoard) {

@@ -210,6 +210,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const handler = {
     boards: () => extractBoards(),
     pins: () => extractPins(message.options),
+    pinsPassive: () => extractPinsPassive(),
     pinCount: () => Promise.resolve({ success: true, pinCount: extractBoardPagePinCount() }),
     diagnose: () => diagnosePage(),
   }[message.mode];
@@ -449,8 +450,12 @@ async function extractPins(options = {}) {
   // Harvest initial batch
   harvestCurrentPins();
 
-  // Scroll and harvest incrementally
-  await scrollAndLoadMore(maxScrolls, harvestCurrentPins);
+  // Scroll and harvest incrementally — callback returns cumulative count
+  // so the scroll loop can track progress and detect stability
+  await scrollAndLoadMore(maxScrolls, () => {
+    harvestCurrentPins();
+    return seenIds.size;
+  });
 
   // Final harvest after scroll completes
   harvestCurrentPins();
@@ -470,6 +475,85 @@ async function extractPins(options = {}) {
   const boardPinCount = extractBoardPagePinCount();
 
   console.log(`[Pinterest Pin DL] extractPins: ${pins.length} unique pins collected (${seenIds.size} seen)`);
+  return { success: true, pins, scrolledPins: pins.length, boardPinCount };
+}
+
+// Passive mode: user scrolls manually while we watch for pins via MutationObserver.
+// Resolves when user clicks the Done button in the overlay.
+async function extractPinsPassive() {
+  await waitForSelector(PIN_SELECTORS, 10000);
+
+  const seenIds = new Set();
+  const pins = [];
+
+  function harvestCurrentPins() {
+    const pinElements = document.querySelectorAll(PIN_SELECTORS);
+    for (const [index, el] of [...pinElements].entries()) {
+      try {
+        const pin = extractPinData(el, index);
+        if (pin && pin.id && !seenIds.has(pin.id)) {
+          seenIds.add(pin.id);
+          pins.push(pin);
+        }
+      } catch (err) {
+        console.warn('Pin extraction failed for element:', err);
+      }
+    }
+  }
+
+  // Initial harvest
+  harvestCurrentPins();
+
+  // Watch for DOM mutations (new pins entering the viewport)
+  const mainEl = document.querySelector('[role="main"]') || document.body;
+  const observer = new MutationObserver(() => {
+    harvestCurrentPins();
+    updateOverlayStatus(`Watching... ${seenIds.size} pins captured — scroll the page, then click Done`, 0, 0);
+  });
+  observer.observe(mainEl, { childList: true, subtree: true });
+
+  // Safety net: harvest on interval in case mutations don't fire for all changes
+  const intervalId = setInterval(() => {
+    harvestCurrentPins();
+    if (overlayEl) {
+      updateOverlayStatus(`Watching... ${seenIds.size} pins captured — scroll the page, then click Done`, 0, 0);
+    }
+  }, 500);
+
+  // Show overlay with Done button
+  if (!overlayEl) createOverlay();
+  updateOverlayStatus(`Watching... ${seenIds.size} pins captured — scroll the page, then click Done`, 0, 0);
+
+  // Repurpose the confirm button as Done
+  const confirmBtn = document.getElementById('pdl-confirm');
+  if (confirmBtn) {
+    confirmBtn.textContent = 'Done';
+    confirmBtn.style.display = '';
+  }
+
+  // Wait for user to click Done (or cancel)
+  await new Promise(resolve => {
+    overlayState.confirmResolve = resolve;
+    // Also resolve on cancel
+    const checkCancel = setInterval(() => {
+      if (overlayState.cancelled || overlayState.skipBoard) {
+        clearInterval(checkCancel);
+        resolve();
+      }
+    }, 200);
+  });
+
+  observer.disconnect();
+  clearInterval(intervalId);
+
+  // Final harvest
+  harvestCurrentPins();
+
+  // Reset confirm button text
+  if (confirmBtn) confirmBtn.textContent = 'Continue →';
+
+  const boardPinCount = extractBoardPagePinCount();
+  console.log(`[Pinterest Pin DL] extractPinsPassive: ${pins.length} unique pins collected`);
   return { success: true, pins, scrolledPins: pins.length, boardPinCount };
 }
 
@@ -624,47 +708,52 @@ function countPinElements() {
   return document.querySelectorAll(PIN_SELECTORS).length;
 }
 
+// Gentle scroll: 50% viewport per step so Pinterest's virtualizer keeps pins in
+// the DOM long enough to harvest. Previous approach jumped to scrollHeight which
+// outraced the virtualizer and missed pins in the middle of the grid.
 async function scrollAndLoadMore(maxScrolls = 300, onNewContent = null) {
   let scrollCount = 0;
-  let lastPinCount = 0;
+  let lastHarvestedCount = 0;
   let sameCountIterations = 0;
+  const step = Math.floor(window.innerHeight * 0.5);
 
   while (scrollCount < maxScrolls) {
-    // Check for cancel/skip from overlay — makes buttons responsive mid-scroll
     if (overlayState.cancelled || overlayState.skipBoard) break;
 
-    window.scrollTo(0, document.body.scrollHeight);
-    await waitForNewContent(2000);
+    window.scrollBy(0, step);
+    await waitForNewContent(1000);
 
     // Harvest pins before they get virtualized away
-    if (onNewContent) onNewContent();
+    const harvested = onNewContent ? onNewContent() : 0;
 
-    const currentPinCount = countPinElements();
-
-    if (currentPinCount === lastPinCount) {
+    // Stability check uses harvested (cumulative) count, not DOM count
+    if (harvested === lastHarvestedCount) {
       sameCountIterations++;
-      // Pinterest lazy-loads in batches — be patient before giving up
-      if (sameCountIterations >= 5) break;
+      // Smaller scrolls hit plateaus more often — need higher threshold
+      if (sameCountIterations >= 10) break;
     } else {
       sameCountIterations = 0;
     }
 
-    lastPinCount = currentPinCount;
+    lastHarvestedCount = harvested;
     scrollCount++;
 
-    // Update overlay with scroll progress every 5 scrolls
-    if (scrollCount % 5 === 0 && overlayEl) {
-      updateOverlayStatus(`Scrolling... ${currentPinCount} pins loaded`, 0, 0);
+    // Update overlay every step with harvested count
+    if (overlayEl) {
+      updateOverlayStatus(`Scrolling... ${harvested} pins harvested`, 0, 0);
     }
 
-    // Log to console every 10 scrolls
     if (scrollCount % 10 === 0) {
-      console.log(`[Pinterest Pin DL] Scroll ${scrollCount}: ${currentPinCount} pins loaded`);
+      console.log(`[Pinterest Pin DL] Scroll ${scrollCount}: ${harvested} pins harvested`);
     }
+
+    // Detect end-of-page — if we're at the bottom, start counting stable iterations from here
+    const atBottom = window.scrollY + window.innerHeight >= document.body.scrollHeight - 5;
+    if (atBottom && sameCountIterations >= 3) break;
   }
 
   window.scrollTo(0, 0);
-  return lastPinCount;
+  return lastHarvestedCount;
 }
 
 function waitForNewContent(timeout) {
