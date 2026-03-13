@@ -16,6 +16,7 @@ let downloadSettings = {
   batchDelay: 10000,
   maxRetries: 3,
   exponentialBackoff: true,
+  folderPrefix: 'pinterest',
 };
 
 let downloadState = {
@@ -616,10 +617,11 @@ async function runDownload(pins) {
       await sleep(randomDelay());
     }
 
-    // Batch delay
+    // Batch delay with ±30% jitter to avoid fixed-interval fingerprint
     if (i + downloadSettings.batchSize < pins.length) {
+      const jitteredBatchDelay = Math.floor(downloadSettings.batchDelay * (0.7 + Math.random() * 0.6));
       showStatus(`Batch ${downloadState.currentBatch}/${downloadState.totalBatches} done. Pausing...`, 'info');
-      await sleep(downloadSettings.batchDelay);
+      await sleep(jitteredBatchDelay);
     }
   }
 
@@ -656,9 +658,10 @@ function downloadPin(pin) {
     const imageUrl = pin.image || pin.thumbnail;
     if (!imageUrl) { resolve(false); return; }
 
+    const prefix = downloadSettings.folderPrefix || 'pinterest';
     const boardSlug = (pin.board || 'uncategorized').replace(/[^a-z0-9]/gi, '_');
     const titleSlug = (pin.title || pin.id).replace(/[^a-z0-9]/gi, '_').substring(0, 50);
-    const filename = `pinterest/${pin.profile || 'unknown'}/${boardSlug}/${titleSlug}_${pin.id}.jpg`;
+    const filename = `${prefix}/${pin.profile || 'unknown'}/${boardSlug}/${titleSlug}_${pin.id}.jpg`;
 
     chrome.runtime.sendMessage({
       action: 'downloadImage',
@@ -1127,6 +1130,7 @@ function applySettings() {
   el('batchDelay').value = downloadSettings.batchDelay;
   el('maxRetries').value = downloadSettings.maxRetries;
   el('exponentialBackoff').checked = downloadSettings.exponentialBackoff;
+  el('folderPrefix').value = downloadSettings.folderPrefix || 'pinterest';
 }
 
 function updateSettings() {
@@ -1136,6 +1140,7 @@ function updateSettings() {
   downloadSettings.batchDelay = parseInt(el('batchDelay').value) || 10000;
   downloadSettings.maxRetries = parseInt(el('maxRetries').value) || 3;
   downloadSettings.exponentialBackoff = el('exponentialBackoff').checked;
+  downloadSettings.folderPrefix = el('folderPrefix').value.trim().replace(/^\/+|\/+$/g, '') || 'pinterest';
   if (downloadSettings.minDelay > downloadSettings.maxDelay) {
     downloadSettings.maxDelay = downloadSettings.minDelay;
     el('maxDelay').value = downloadSettings.maxDelay;

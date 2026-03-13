@@ -189,6 +189,13 @@ header h1 { font-size: 16px; font-weight: 600; }
   font-size: 12px; width: 80px;
 }
 .settings-grid input[type="number"]:focus { border-color: #e60023; outline: none; }
+.settings-grid input[type="text"] {
+  padding: 4px 6px; border: 1px solid #ddd; border-radius: 4px;
+  font-size: 12px; width: 120px;
+}
+.settings-grid input[type="text"]:focus { border-color: #e60023; outline: none; }
+.settings-wide { flex-basis: 100%; }
+.settings-hint { font-size: 10px; color: #999; flex-basis: 100%; margin-top: -6px; }
 
 /* ── Resume banner ───────────────────────────────────── */
 
