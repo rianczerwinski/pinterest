@@ -437,19 +437,23 @@ async function loadSelectedBoards() {
       showDiff(newPinIds.size, totalPins);
     }
 
-    // Show verification summary — flag mismatches, note tombstones
+    // Show verification summary — always show per-board accounting
     const totalTombstones = verificationResults.reduce((sum, v) => sum + (v.tombstones || 0), 0);
     const mismatches = verificationResults.filter(v => !v.match);
     const countSummary = `${totalPins} pins (${totalNew} new, ${totalUpdated} updated)`;
-    const tombstoneNote = totalTombstones > 0 ? ` (${totalTombstones} removed/unavailable)` : '';
+
+    // Per-board breakdown: always shown so the user can verify completeness
+    const boardDetails = verificationResults.map(v => {
+      const parts = [`${v.boardName}: ${v.scraped}/${v.expected ?? '?'}`];
+      if (v.tombstones) parts.push(`+${v.tombstones} removed`);
+      if (!v.match) parts.push('⚠');
+      return parts.join(' ');
+    }).join(', ');
+
     if (mismatches.length > 0) {
-      const details = mismatches.map(m => {
-        const t = m.tombstones ? ` +${m.tombstones} removed` : '';
-        return `${m.boardName}: ${m.scraped}/${m.expected ?? '?'}${t}`;
-      }).join(', ');
-      showStatus(`Loaded ${countSummary}${tombstoneNote}. ⚠ Incomplete boards: ${details}`, 'warning');
+      showStatus(`Loaded ${countSummary}. ${boardDetails}`, 'warning');
     } else {
-      showStatus(`Loaded ${countSummary}${tombstoneNote} from ${selectedBoards.length} boards`, 'success');
+      showStatus(`Loaded ${countSummary}. ${boardDetails}`, 'success');
     }
 
     renderPins();
