@@ -47,6 +47,34 @@ async function downloadImage(url, filename, pinId) {
 
 function tryDownload(url, filename, pinId) {
   return new Promise(resolve => {
+    let settled = false;
+    const settle = (result) => { if (!settled) { settled = true; resolve(result); } };
+
+    // Timeout — don't hang forever
+    const timeout = setTimeout(() => {
+      chrome.downloads.onChanged.removeListener(listener);
+      settle({ success: false, error: 'Download timed out after 60s' });
+    }, 60000);
+
+    const listener = delta => {
+      if (delta.id === undefined) return; // guard for pre-download events
+      if (!pendingDownloadId || delta.id !== pendingDownloadId || !delta.state) return;
+      chrome.downloads.onChanged.removeListener(listener);
+      clearTimeout(timeout);
+
+      if (delta.state.current === 'complete') {
+        chrome.downloads.search({ id: pendingDownloadId }, results => {
+          settle({ success: true, downloadId: pendingDownloadId, path: results?.[0]?.filename || filename, pinId });
+        });
+      } else if (delta.state.current === 'interrupted') {
+        settle({ success: false, error: `Download interrupted: ${delta.error?.current || 'unknown'}` });
+      }
+    };
+
+    // Register listener BEFORE starting download to avoid race condition
+    chrome.downloads.onChanged.addListener(listener);
+    let pendingDownloadId = null;
+
     chrome.downloads.download({
       url,
       filename,
@@ -54,23 +82,28 @@ function tryDownload(url, filename, pinId) {
       saveAs: false,
     }, downloadId => {
       if (chrome.runtime.lastError) {
-        resolve({ success: false, error: chrome.runtime.lastError.message });
+        chrome.downloads.onChanged.removeListener(listener);
+        clearTimeout(timeout);
+        settle({ success: false, error: chrome.runtime.lastError.message });
         return;
       }
 
-      const listener = delta => {
-        if (delta.id !== downloadId || !delta.state) return;
-        chrome.downloads.onChanged.removeListener(listener);
+      pendingDownloadId = downloadId;
 
-        if (delta.state.current === 'complete') {
-          chrome.downloads.search({ id: downloadId }, results => {
-            resolve({ success: true, downloadId, path: results?.[0]?.filename || filename, pinId });
-          });
-        } else if (delta.state.current === 'interrupted') {
-          resolve({ success: false, error: `Download interrupted: ${delta.error?.current || 'unknown'}` });
+      // Check if already completed (fast downloads beat the listener)
+      chrome.downloads.search({ id: downloadId }, results => {
+        const state = results?.[0]?.state;
+        if (state === 'complete') {
+          chrome.downloads.onChanged.removeListener(listener);
+          clearTimeout(timeout);
+          settle({ success: true, downloadId, path: results[0].filename || filename, pinId });
+        } else if (state === 'interrupted') {
+          chrome.downloads.onChanged.removeListener(listener);
+          clearTimeout(timeout);
+          settle({ success: false, error: `Download interrupted: ${results[0].error || 'unknown'}` });
         }
-      };
-      chrome.downloads.onChanged.addListener(listener);
+        // else still in_progress — listener will handle it
+      });
     });
   });
 }
