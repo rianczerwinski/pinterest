@@ -66,7 +66,7 @@ function initEventListeners() {
   el('selectAllPinsBtn').addEventListener('click', () => setAllPinSelections(true));
   el('deselectAllPinsBtn').addEventListener('click', () => setAllPinSelections(false));
   el('resetDownloadsBtn').addEventListener('click', resetDownloads);
-  el('exportMetadataBtn').addEventListener('click', exportMetadataOnly);
+  el('exportMetadataBtn')?.addEventListener('click', exportMetadataOnly);
   el('downloadSelectedBtn').addEventListener('click', downloadSelected);
   el('searchInput').addEventListener('input', debounce(renderPins, 300));
   el('filterSelect').addEventListener('change', renderPins);
