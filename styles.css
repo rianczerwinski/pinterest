@@ -197,6 +197,21 @@ header h1 { font-size: 16px; font-weight: 600; }
 .settings-wide { flex-basis: 100%; }
 .settings-hint { font-size: 10px; color: #999; flex-basis: 100%; margin-top: -6px; }
 
+/* ── Completeness indicators ─────────────────────────── */
+
+.completion-badge {
+  font-size: 9px; font-weight: 700; padding: 1px 5px;
+  border-radius: 8px; margin-left: 4px; vertical-align: middle;
+}
+.completion-badge.complete { background: #d4edda; color: #155724; }
+.completion-badge.partial { background: #fff3cd; color: #856404; }
+.completion-badge.low { background: #f8d7da; color: #721c24; }
+
+.profile-summary {
+  font-size: 11px; color: #555; padding: 4px 8px;
+  background: #f5f5f5; border-radius: 4px; margin-bottom: 6px;
+}
+
 /* ── Resume banner ───────────────────────────────────── */
 
 .harvest-verification {

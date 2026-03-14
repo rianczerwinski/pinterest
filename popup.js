@@ -411,6 +411,17 @@ async function loadSelectedBoards() {
 
       boardMeta.pins = boardPinIds;
       boardMeta.lastFetched = new Date().toISOString();
+      // Track per-board completeness across harvests
+      boardMeta.harvestHistory = (boardMeta.harvestHistory || []).slice(-9); // cap at 10
+      boardMeta.harvestHistory.push({
+        timestamp: new Date().toISOString(),
+        captured: scraped,
+        unavailable: result.unavailable || 0,
+        expected,
+        newPins: boardPinIds.filter(id => !previousPinIds.has(id)).length,
+      });
+      boardMeta.capturedTotal = boardMeta.pins.length;
+      boardMeta.completionPct = expected ? boardMeta.capturedTotal / expected : null;
       saveState();
 
       // If await-confirm is on, pause for user to review
@@ -753,6 +764,24 @@ function renderBoards() {
   el('boardSection').style.display = boardNames.length ? '' : 'none';
   el('boardCount').textContent = boardNames.length;
 
+  // Profile-level completeness summary
+  let totalCaptured = 0, totalExpected = 0, boardsComplete = 0;
+  for (const b of Object.values(profile.boards)) {
+    if (b.capturedTotal != null && b.pinCount != null) {
+      totalCaptured += b.capturedTotal;
+      totalExpected += b.pinCount;
+      if (b.completionPct >= 0.99) boardsComplete++;
+    }
+  }
+  const summaryEl = el('profileSummary');
+  if (summaryEl && totalExpected > 0) {
+    const pct = (totalCaptured / totalExpected * 100).toFixed(1);
+    summaryEl.textContent = `${boardsComplete}/${boardNames.length} boards complete · ${totalCaptured.toLocaleString()}/${totalExpected.toLocaleString()} pins (${pct}%)`;
+    summaryEl.style.display = '';
+  } else if (summaryEl) {
+    summaryEl.style.display = 'none';
+  }
+
   let truncatedCount = 0;
   const grid = el('boardGrid');
   grid.innerHTML = boardNames.map(name => {
@@ -769,13 +798,21 @@ function renderBoards() {
       ? `<span title="Approximate — use Scrape Counts for exact number" style="color:#e65100">~${pinCount}</span>`
       : pinCount;
 
+    // Completeness indicator
+    let completionBadge = '';
+    if (b.completionPct != null) {
+      const pct = Math.round(b.completionPct * 100);
+      const cls = pct >= 99 ? 'complete' : pct >= 90 ? 'partial' : 'low';
+      completionBadge = ` <span class="completion-badge ${cls}" title="${b.capturedTotal || 0} captured">${pct}%</span>`;
+    }
+
     return `
       <div class="board-card" data-board="${esc(name)}">
         <label class="board-card-inner">
           <input type="checkbox" class="board-checkbox" ${checked ? 'checked' : ''}>
           ${b.coverImage ? `<img src="${esc(b.coverImage)}" class="board-cover" alt="">` : '<div class="board-cover-placeholder"></div>'}
           <div class="board-card-info">
-            <div class="board-card-name">${esc(name)}</div>
+            <div class="board-card-name">${esc(name)}${completionBadge}</div>
             <div class="board-card-meta">${countDisplay} pins &middot; ${lastFetched}</div>
           </div>
         </label>
