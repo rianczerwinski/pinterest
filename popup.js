@@ -400,6 +400,9 @@ async function loadSelectedBoards() {
             downloaded: false,
             downloadPath: null,
             downloadedAt: null,
+            downloadError: null,
+            downloadAttempts: 0,
+            terminalFailure: false,
             selected: false,
           };
           totalNew++;
@@ -578,8 +581,6 @@ async function runDownload(pins) {
   downloadState.isDownloading = true;
   downloadState.completed = 0;
   downloadState.failed = 0;
-  downloadState.total = pins.length;
-  downloadState.totalBatches = Math.ceil(pins.length / downloadSettings.batchSize);
   downloadState.currentBatch = 0;
 
   el('downloadProgress').style.display = '';
@@ -593,6 +594,15 @@ async function runDownload(pins) {
     total: pins.length,
   };
 
+  // Skip pins with terminal failures from prior runs
+  const terminalSkipped = pins.filter(p => p.terminalFailure);
+  pins = pins.filter(p => !p.terminalFailure);
+  if (terminalSkipped.length > 0) {
+    console.log(`[Pinterest Pin DL] Skipping ${terminalSkipped.length} pins with terminal failures`);
+  }
+
+  downloadState.total = pins.length;
+  downloadState.totalBatches = Math.ceil(pins.length / downloadSettings.batchSize);
   showStatus(`Downloading ${pins.length} pins...`, 'info');
 
   for (let i = 0; i < pins.length; i += downloadSettings.batchSize) {
@@ -602,15 +612,20 @@ async function runDownload(pins) {
 
     for (const pin of batch) {
       const result = await downloadPinWithRetry(pin);
-      if (result === true) {
+      pin.downloadAttempts = (pin.downloadAttempts || 0) + 1;
+      if (result.success) {
         downloadState.completed++;
         archive.downloads.completed++;
         pin.downloaded = true;
         pin.downloadedAt = new Date().toISOString();
+        pin.downloadError = null;
       } else {
         downloadState.failed++;
         archive.downloads.failed++;
-        console.warn(`[Pinterest Pin DL] Download failed for pin ${pin.id}:`, result || 'unknown error',
+        pin.downloadError = result.error;
+        pin.terminalFailure = !result.retryable;
+        console.warn(`[Pinterest Pin DL] Download failed for pin ${pin.id}: ${result.error}`,
+          `(${result.retryable ? 'retryable' : 'terminal'})`,
           `image: ${pin.image}, thumbnail: ${pin.thumbnail}`);
       }
       updateDownloadProgress();
@@ -638,25 +653,34 @@ async function runDownload(pins) {
 }
 
 async function downloadPinWithRetry(pin, attempt = 0) {
-  try {
-    return await downloadPin(pin);
-  } catch (err) {
-    if (attempt < downloadSettings.maxRetries) {
-      const delay = downloadSettings.exponentialBackoff
-        ? Math.min(downloadSettings.maxDelay * Math.pow(2, attempt), 30000)
-        : downloadSettings.maxDelay;
-      await sleep(delay);
-      return downloadPinWithRetry(pin, attempt + 1);
-    }
-    console.warn(`Download failed for pin ${pin.id}:`, err);
-    return false;
+  const result = await downloadPin(pin);
+  if (result.success) return result;
+
+  // Terminal failures — don't retry
+  if (!result.retryable) return result;
+
+  // Retryable failure — backoff and try again
+  if (attempt < downloadSettings.maxRetries) {
+    const delay = downloadSettings.exponentialBackoff
+      ? Math.min(downloadSettings.maxDelay * Math.pow(2, attempt), 30000)
+      : downloadSettings.maxDelay;
+    await sleep(delay);
+    return downloadPinWithRetry(pin, attempt + 1);
   }
+  console.warn(`[Pinterest Pin DL] Download failed after ${attempt + 1} attempts for pin ${pin.id}:`, result.error);
+  return result;
 }
 
+// Terminal error patterns — will never succeed on retry
+const TERMINAL_ERRORS = /SERVER_BAD_CONTENT|FILE_FAILED|SERVER_FORBIDDEN|SERVER_UNAUTHORIZED|URL_INVALID/i;
+
 function downloadPin(pin) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     const imageUrl = pin.image || pin.thumbnail;
-    if (!imageUrl) { resolve(false); return; }
+    if (!imageUrl) {
+      resolve({ success: false, retryable: false, error: 'No image URL' });
+      return;
+    }
 
     const prefix = downloadSettings.folderPrefix || 'pinterest';
     const boardSlug = (pin.board || 'uncategorized').replace(/[^a-z0-9]/gi, '_');
@@ -670,12 +694,13 @@ function downloadPin(pin) {
       pinId: pin.id,
     }, response => {
       if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
+        resolve({ success: false, retryable: true, error: chrome.runtime.lastError.message });
       } else if (response?.success) {
         pin.downloadPath = response.path;
-        resolve(true);
+        resolve({ success: true });
       } else {
-        reject(new Error(response?.error || 'Download returned failure'));
+        const error = response?.error || 'Download returned failure';
+        resolve({ success: false, retryable: !TERMINAL_ERRORS.test(error), error });
       }
     });
   });
@@ -805,6 +830,7 @@ function renderPins() {
   if (filter === 'new') pins = pins.filter(p => newPinIds.has(p.id));
   else if (filter === 'downloaded') pins = pins.filter(p => p.downloaded);
   else if (filter === 'not-downloaded') pins = pins.filter(p => !p.downloaded);
+  else if (filter === 'failed') pins = pins.filter(p => p.downloadError && !p.terminalFailure);
   else if (filter === 'selected') pins = pins.filter(p => p.selected);
 
   // Group by board
@@ -1022,6 +1048,17 @@ async function loadState() {
       if (result.currentProfile) {
         currentProfile = result.currentProfile;
       }
+      // Retroactive cleanup: mark pins with no image as terminal failures
+      // (stale entries from before unavailable pin detection was added)
+      let cleaned = 0;
+      for (const pin of Object.values(archive.pins)) {
+        if (!pin.image && !pin.thumbnail && !pin.terminalFailure) {
+          pin.terminalFailure = true;
+          pin.downloadError = pin.downloadError || 'No image URL (unavailable pin)';
+          cleaned++;
+        }
+      }
+      if (cleaned > 0) console.log(`[Pinterest Pin DL] Marked ${cleaned} imageless pins as terminal failures`);
       resolve();
     });
   });
