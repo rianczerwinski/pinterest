@@ -66,6 +66,7 @@ function initEventListeners() {
   el('selectAllPinsBtn').addEventListener('click', () => setAllPinSelections(true));
   el('deselectAllPinsBtn').addEventListener('click', () => setAllPinSelections(false));
   el('resetDownloadsBtn').addEventListener('click', resetDownloads);
+  el('exportMetadataBtn').addEventListener('click', exportMetadataOnly);
   el('downloadSelectedBtn').addEventListener('click', downloadSelected);
   el('searchInput').addEventListener('input', debounce(renderPins, 300));
   el('filterSelect').addEventListener('change', renderPins);
@@ -769,6 +770,16 @@ async function downloadPin(pin) {
 }
 
 // ── Sidecar metadata ─────────────────────────────────────
+
+/** Export metadata for all downloaded pins in the current profile */
+async function exportMetadataOnly() {
+  if (!currentProfile) { showStatus('No profile loaded', 'error'); return; }
+  const pins = Object.values(archive.pins).filter(p => p.profile === currentProfile && p.downloaded);
+  if (pins.length === 0) { showStatus('No downloaded pins to export metadata for', 'error'); return; }
+  showStatus(`Exporting metadata for ${pins.length} pins...`, 'info');
+  await generateSidecarMetadata(pins);
+  showStatus(`Metadata exported for ${pins.length} pins`, 'success');
+}
 
 /** Generate a metadata JSON file per board for downloaded pins */
 async function generateSidecarMetadata(pins) {
