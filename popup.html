@@ -90,10 +90,11 @@
         <details class="settings-toggle">
           <summary>Settings</summary>
           <div class="settings-grid">
-            <label>Min delay <input type="number" id="minDelay" value="2000" min="500" step="100"></label>
-            <label>Max delay <input type="number" id="maxDelay" value="5000" min="1000" step="100"></label>
-            <label>Batch size <input type="number" id="batchSize" value="5" min="1" max="50"></label>
-            <label>Batch delay <input type="number" id="batchDelay" value="10000" min="5000" step="1000"></label>
+            <label>Min delay (ms) <input type="number" id="minDelay" value="100" min="0" step="50"></label>
+            <label>Max delay (ms) <input type="number" id="maxDelay" value="300" min="0" step="50"></label>
+            <label>Batch size <input type="number" id="batchSize" value="20" min="1" max="100"></label>
+            <label>Batch delay (ms) <input type="number" id="batchDelay" value="1000" min="0" step="100"></label>
+            <label>Concurrent <input type="number" id="concurrency" value="6" min="1" max="10"></label>
             <label>Max retries <input type="number" id="maxRetries" value="3" min="0" max="10"></label>
             <label><input type="checkbox" id="exponentialBackoff" checked> Exp. backoff</label>
             <label class="settings-wide">Download folder <input type="text" id="folderPrefix" value="pinterest" placeholder="pinterest"></label>

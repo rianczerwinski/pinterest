@@ -10,10 +10,11 @@ let newPinIds = new Set(); // populated after diff
 let selectedPinterestTab = null;
 
 let downloadSettings = {
-  minDelay: 2000,
-  maxDelay: 5000,
-  batchSize: 5,
-  batchDelay: 10000,
+  minDelay: 100,
+  maxDelay: 300,
+  batchSize: 20,
+  batchDelay: 1000,
+  concurrency: 6,
   maxRetries: 3,
   exponentialBackoff: true,
   folderPrefix: 'pinterest',
@@ -84,7 +85,7 @@ function initEventListeners() {
   el('importFile').addEventListener('change', importArchive);
 
   // Settings
-  for (const id of ['minDelay', 'maxDelay', 'batchSize', 'batchDelay', 'maxRetries', 'exponentialBackoff']) {
+  for (const id of ['minDelay', 'maxDelay', 'batchSize', 'batchDelay', 'concurrency', 'maxRetries', 'exponentialBackoff']) {
     el(id).addEventListener('change', updateSettings);
   }
 }
@@ -625,36 +626,47 @@ async function runDownload(pins) {
 
   downloadState.total = pins.length;
   downloadState.totalBatches = Math.ceil(pins.length / downloadSettings.batchSize);
-  showStatus(`Downloading ${pins.length} pins...`, 'info');
+  showStatus(`Downloading ${pins.length} pins (${downloadSettings.concurrency} concurrent)...`, 'info');
+
+  const concurrency = downloadSettings.concurrency || 6;
 
   for (let i = 0; i < pins.length; i += downloadSettings.batchSize) {
     const batch = pins.slice(i, i + downloadSettings.batchSize);
     downloadState.currentBatch++;
     saveState();
 
-    for (const pin of batch) {
-      const result = await downloadPinWithRetry(pin);
-      pin.downloadAttempts = (pin.downloadAttempts || 0) + 1;
-      if (result.success) {
-        downloadState.completed++;
-        archive.downloads.completed++;
-        pin.downloaded = true;
-        pin.downloadedAt = new Date().toISOString();
-        pin.downloadError = null;
-      } else {
-        downloadState.failed++;
-        archive.downloads.failed++;
-        pin.downloadError = result.error;
-        pin.terminalFailure = !result.retryable;
-        console.warn(`[Pinterest Pin DL] Download failed for pin ${pin.id}: ${result.error}`,
-          `(${result.retryable ? 'retryable' : 'terminal'})`,
-          `image: ${pin.image}, thumbnail: ${pin.thumbnail}`);
+    // Process batch with concurrent downloads
+    let cursor = 0;
+    const processNext = async () => {
+      while (cursor < batch.length) {
+        const pin = batch[cursor++];
+        const result = await downloadPinWithRetry(pin);
+        pin.downloadAttempts = (pin.downloadAttempts || 0) + 1;
+        if (result.success) {
+          downloadState.completed++;
+          archive.downloads.completed++;
+          pin.downloaded = true;
+          pin.downloadedAt = new Date().toISOString();
+          pin.downloadError = null;
+        } else {
+          downloadState.failed++;
+          archive.downloads.failed++;
+          pin.downloadError = result.error;
+          pin.terminalFailure = !result.retryable;
+          console.warn(`[Pinterest Pin DL] Download failed for pin ${pin.id}: ${result.error}`,
+            `(${result.retryable ? 'retryable' : 'terminal'})`,
+            `image: ${pin.image}, thumbnail: ${pin.thumbnail}`);
+        }
+        updateDownloadProgress();
+        await sleep(randomDelay());
       }
-      updateDownloadProgress();
-      await sleep(randomDelay());
-    }
+    };
 
-    // Batch delay with ±30% jitter to avoid fixed-interval fingerprint
+    // Launch N concurrent workers on the batch
+    const workers = Array.from({ length: Math.min(concurrency, batch.length) }, () => processNext());
+    await Promise.all(workers);
+
+    // Brief pause between batches
     if (i + downloadSettings.batchSize < pins.length) {
       const jitteredBatchDelay = Math.floor(downloadSettings.batchDelay * (0.7 + Math.random() * 0.6));
       showStatus(`Batch ${downloadState.currentBatch}/${downloadState.totalBatches} done. Pausing...`, 'info');
@@ -1328,16 +1340,18 @@ function applySettings() {
   el('maxDelay').value = downloadSettings.maxDelay;
   el('batchSize').value = downloadSettings.batchSize;
   el('batchDelay').value = downloadSettings.batchDelay;
+  el('concurrency').value = downloadSettings.concurrency;
   el('maxRetries').value = downloadSettings.maxRetries;
   el('exponentialBackoff').checked = downloadSettings.exponentialBackoff;
   el('folderPrefix').value = downloadSettings.folderPrefix || 'pinterest';
 }
 
 function updateSettings() {
-  downloadSettings.minDelay = parseInt(el('minDelay').value) || 2000;
-  downloadSettings.maxDelay = parseInt(el('maxDelay').value) || 5000;
-  downloadSettings.batchSize = parseInt(el('batchSize').value) || 5;
-  downloadSettings.batchDelay = parseInt(el('batchDelay').value) || 10000;
+  downloadSettings.minDelay = parseInt(el('minDelay').value) || 100;
+  downloadSettings.maxDelay = parseInt(el('maxDelay').value) || 300;
+  downloadSettings.batchSize = parseInt(el('batchSize').value) || 20;
+  downloadSettings.batchDelay = parseInt(el('batchDelay').value) || 1000;
+  downloadSettings.concurrency = Math.min(parseInt(el('concurrency').value) || 6, 10);
   downloadSettings.maxRetries = parseInt(el('maxRetries').value) || 3;
   downloadSettings.exponentialBackoff = el('exponentialBackoff').checked;
   downloadSettings.folderPrefix = el('folderPrefix').value.trim().replace(/^\/+|\/+$/g, '') || 'pinterest';
