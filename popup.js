@@ -23,6 +23,7 @@ let downloadSettings = {
 
 let downloadState = {
   isDownloading: false,
+  cancelRequested: false,
   currentBatch: 0,
   totalBatches: 0,
   completed: 0,
@@ -70,6 +71,7 @@ function initEventListeners() {
   el('resetDownloadsBtn').addEventListener('click', resetDownloads);
   el('exportMetadataBtn')?.addEventListener('click', exportMetadataOnly);
   el('downloadSelectedBtn').addEventListener('click', downloadSelected);
+  el('cancelDownloadBtn').addEventListener('click', cancelDownload);
   el('searchInput').addEventListener('input', debounce(renderPins, 300));
   el('filterSelect').addEventListener('change', renderPins);
 
@@ -599,10 +601,17 @@ function clearResume() {
   saveState();
 }
 
+function cancelDownload() {
+  if (!downloadState.isDownloading) return;
+  downloadState.cancelRequested = true;
+  showStatus("Cancelling after current downloads finish...", "warning");
+}
+
 async function runDownload(pins) {
   if (downloadState.isDownloading) { showStatus('Download in progress', 'error'); return; }
 
   downloadState.isDownloading = true;
+  downloadState.cancelRequested = false;
   downloadState.completed = 0;
   downloadState.failed = 0;
   downloadState.currentBatch = 0;
@@ -631,7 +640,7 @@ async function runDownload(pins) {
 
   const concurrency = downloadSettings.concurrency || 6;
 
-  for (let i = 0; i < pins.length; i += downloadSettings.batchSize) {
+  for (let i = 0; i < pins.length && !downloadState.cancelRequested; i += downloadSettings.batchSize) {
     const batch = pins.slice(i, i + downloadSettings.batchSize);
     downloadState.currentBatch++;
     saveState();
@@ -639,7 +648,7 @@ async function runDownload(pins) {
     // Process batch with concurrent downloads
     let cursor = 0;
     const processNext = async () => {
-      while (cursor < batch.length) {
+      while (cursor < batch.length && !downloadState.cancelRequested) {
         const pin = batch[cursor++];
         const result = await downloadPinWithRetry(pin);
         pin.downloadAttempts = (pin.downloadAttempts || 0) + 1;
@@ -684,8 +693,11 @@ async function runDownload(pins) {
   saveState();
   renderPins();
 
-  const msg = `Done: ${downloadState.completed} downloaded, ${downloadState.failed} failed`;
-  showStatus(msg, downloadState.failed > 0 ? 'warning' : 'success');
+  const cancelled = downloadState.cancelRequested;
+  const msg = cancelled
+    ? `Cancelled: ${downloadState.completed} downloaded, ${downloadState.failed} failed`
+    : `Done: ${downloadState.completed} downloaded, ${downloadState.failed} failed`;
+  showStatus(msg, (downloadState.failed > 0 || cancelled) ? 'warning' : 'success');
 
   setTimeout(() => { el('downloadProgress').style.display = 'none'; }, 5000);
 }
