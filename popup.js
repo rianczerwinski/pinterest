@@ -53,6 +53,7 @@ function initEventListeners() {
 
   // Boards
   el('selectAllBoardsBtn').addEventListener('click', () => setBoardSelections(true));
+  el('selectIncompleteBoardsBtn').addEventListener('click', selectIncompleteBoards);
   el('deselectAllBoardsBtn').addEventListener('click', () => setBoardSelections(false));
   el('loadSelectedBoardsBtn').addEventListener('click', loadSelectedBoards);
   el('scrapeCountsBtn').addEventListener('click', scrapeAccurateCounts);
@@ -335,6 +336,7 @@ async function loadSelectedBoards() {
       const boardMeta = profile.boards[boardName];
       if (!boardMeta?.url) continue;
 
+      try {
       const statusText = `Board ${i + 1}/${selectedBoards.length}: ${boardName}`;
       showStatus(`Loading ${statusText}...`, 'info');
       await sendOverlay(tab.id, 'overlay-update', {
@@ -431,6 +433,12 @@ async function loadSelectedBoards() {
           current: i + 1, total: selectedBoards.length,
         });
         await waitForOverlayConfirm();
+      }
+      } catch (err) {
+        console.error(`[Pinterest Pin DL] Board harvest failed for ${boardName}:`, err);
+        verificationResults.push({ boardName, scraped: 0, expected: boardMeta?.pinCount, match: false, error: err.message });
+        showStatus(`Board "${boardName}" failed: ${err.message}. Continuing...`, 'warning');
+        continue;
       }
     }
 
@@ -669,6 +677,15 @@ async function downloadPinWithRetry(pin, attempt = 0) {
 
   // Terminal failures — don't retry
   if (!result.retryable) return result;
+
+  // Rate limit detection — pause the whole batch, don't count against retry budget
+  if (/429|rate.?limit|too many requests|challenge/i.test(result.error)) {
+    const cooldown = 60000 + Math.floor(Math.random() * 30000);
+    console.warn(`[Pinterest Pin DL] Rate limit detected — pausing ${Math.round(cooldown/1000)}s`);
+    showStatus(`Rate limited — cooling down ${Math.round(cooldown/1000)}s...`, 'warning');
+    await sleep(cooldown);
+    return downloadPinWithRetry(pin, attempt); // retry without incrementing attempt
+  }
 
   // Retryable failure — backoff and try again
   if (attempt < downloadSettings.maxRetries) {
@@ -1043,6 +1060,21 @@ function checkForResume() {
 function setBoardSelections(value) {
   for (const name of Object.keys(boardSelections)) boardSelections[name] = value;
   el('boardGrid').querySelectorAll('.board-checkbox').forEach(cb => { cb.checked = value; });
+}
+
+function selectIncompleteBoards() {
+  const profile = archive.profiles[currentProfile];
+  if (!profile) return;
+  for (const name of Object.keys(boardSelections)) {
+    const b = profile.boards[name];
+    boardSelections[name] = !b?.completionPct || b.completionPct < 0.99;
+  }
+  el('boardGrid').querySelectorAll('.board-card').forEach(card => {
+    const name = card.dataset.board;
+    card.querySelector('.board-checkbox').checked = boardSelections[name];
+  });
+  const count = Object.values(boardSelections).filter(v => v).length;
+  showStatus(`Selected ${count} incomplete boards`, 'info');
 }
 
 function setAllPinSelections(value) {
