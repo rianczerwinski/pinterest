@@ -10,6 +10,7 @@ let newPinIds = new Set(); // populated after diff
 let selectedPinterestTab = null;
 
 let downloadSettings = {
+  _settingsVersion: 2,  // bump when timing defaults change to force upgrade
   minDelay: 100,
   maxDelay: 300,
   batchSize: 20,
@@ -1218,7 +1219,18 @@ async function loadState() {
         archive = migrateV1(result.pinsData);
       }
       if (result.downloadSettings) {
-        downloadSettings = result.downloadSettings;
+        // Merge saved settings, but only for keys that exist in current defaults.
+        // New defaults (concurrency, faster timing) take effect on upgrade;
+        // user can still adjust in the UI and their changes will persist.
+        const saved = result.downloadSettings;
+        if (saved._settingsVersion === downloadSettings._settingsVersion) {
+          downloadSettings = { ...downloadSettings, ...saved };
+        } else {
+          // Settings schema changed — keep new defaults, carry over non-timing settings
+          downloadSettings.folderPrefix = saved.folderPrefix || downloadSettings.folderPrefix;
+          downloadSettings.maxRetries = saved.maxRetries ?? downloadSettings.maxRetries;
+          downloadSettings.exponentialBackoff = saved.exponentialBackoff ?? downloadSettings.exponentialBackoff;
+        }
       }
       if (result.currentProfile) {
         currentProfile = result.currentProfile;
