@@ -391,6 +391,8 @@ async function loadSelectedBoards() {
           existing.title = pin.title || existing.title;
           existing.image = pin.image || existing.image;
           existing.thumbnail = pin.thumbnail || existing.thumbnail;
+          existing.altText = pin.altText || existing.altText || '';
+          existing.carouselImages = pin.carouselImages || existing.carouselImages || null;
           totalUpdated++;
         } else {
           archive.pins[pin.id] = {
@@ -659,6 +661,9 @@ async function runDownload(pins) {
     }
   }
 
+  // Generate sidecar metadata JSON per board
+  await generateSidecarMetadata(pins);
+
   // Done
   downloadState.isDownloading = false;
   el('downloadSelectedBtn').disabled = false;
@@ -702,36 +707,114 @@ async function downloadPinWithRetry(pin, attempt = 0) {
 // Terminal error patterns — will never succeed on retry
 const TERMINAL_ERRORS = /SERVER_BAD_CONTENT|FILE_FAILED|SERVER_FORBIDDEN|SERVER_UNAUTHORIZED|URL_INVALID/i;
 
-function downloadPin(pin) {
+/** Detect file extension from a Pinterest image URL */
+function extFromUrl(url) {
+  try {
+    const path = new URL(url).pathname;
+    const match = path.match(/\.(jpe?g|png|gif|webp|svg)$/i);
+    return match ? match[0].toLowerCase() : '.jpg';
+  } catch { return '.jpg'; }
+}
+
+function downloadSingleImage(imageUrl, filename, pinId) {
   return new Promise((resolve) => {
-    const imageUrl = pin.image || pin.thumbnail;
-    if (!imageUrl) {
-      resolve({ success: false, retryable: false, error: 'No image URL' });
-      return;
-    }
-
-    const prefix = downloadSettings.folderPrefix || 'pinterest';
-    const boardSlug = (pin.board || 'uncategorized').replace(/[^a-z0-9]/gi, '_');
-    const titleSlug = (pin.title || pin.id).replace(/[^a-z0-9]/gi, '_').substring(0, 50);
-    const filename = `${prefix}/${pin.profile || 'unknown'}/${boardSlug}/${titleSlug}_${pin.id}.jpg`;
-
     chrome.runtime.sendMessage({
       action: 'downloadImage',
       url: imageUrl,
       filename,
-      pinId: pin.id,
+      pinId,
     }, response => {
       if (chrome.runtime.lastError) {
         resolve({ success: false, retryable: true, error: chrome.runtime.lastError.message });
       } else if (response?.success) {
-        pin.downloadPath = response.path;
-        resolve({ success: true });
+        resolve({ success: true, path: response.path });
       } else {
         const error = response?.error || 'Download returned failure';
         resolve({ success: false, retryable: !TERMINAL_ERRORS.test(error), error });
       }
     });
   });
+}
+
+async function downloadPin(pin) {
+  const imageUrl = pin.image || pin.thumbnail;
+  if (!imageUrl) {
+    return { success: false, retryable: false, error: 'No image URL' };
+  }
+
+  const prefix = downloadSettings.folderPrefix || 'pinterest';
+  const boardSlug = (pin.board || 'uncategorized').replace(/[^a-z0-9]/gi, '_');
+  const titleSlug = (pin.title || pin.id).replace(/[^a-z0-9]/gi, '_').substring(0, 50);
+  const ext = extFromUrl(imageUrl);
+  const filename = `${prefix}/${pin.profile || 'unknown'}/${boardSlug}/${titleSlug}_${pin.id}${ext}`;
+
+  const result = await downloadSingleImage(imageUrl, filename, pin.id);
+  if (result.success) pin.downloadPath = result.path;
+
+  // Download carousel images (if any) after the primary succeeds
+  if (result.success && pin.carouselImages?.length > 1) {
+    for (let i = 1; i < pin.carouselImages.length; i++) {
+      const carouselUrl = pin.carouselImages[i];
+      const carouselExt = extFromUrl(carouselUrl);
+      const carouselFilename = `${prefix}/${pin.profile || 'unknown'}/${boardSlug}/${titleSlug}_${pin.id}_${i + 1}${carouselExt}`;
+      const carouselResult = await downloadSingleImage(carouselUrl, carouselFilename, pin.id);
+      if (!carouselResult.success) {
+        console.warn(`[Pinterest Pin DL] Carousel image ${i + 1} failed for pin ${pin.id}: ${carouselResult.error}`);
+      }
+      await sleep(randomDelay());
+    }
+  }
+
+  return result;
+}
+
+// ── Sidecar metadata ─────────────────────────────────────
+
+/** Generate a metadata JSON file per board for downloaded pins */
+async function generateSidecarMetadata(pins) {
+  // Group downloaded pins by board
+  const byBoard = {};
+  for (const pin of pins) {
+    if (!pin.downloaded) continue;
+    const board = pin.board || 'uncategorized';
+    if (!byBoard[board]) byBoard[board] = [];
+    byBoard[board].push(pin);
+  }
+
+  const prefix = downloadSettings.folderPrefix || 'pinterest';
+  for (const [board, boardPins] of Object.entries(byBoard)) {
+    if (boardPins.length === 0) continue;
+    const boardSlug = board.replace(/[^a-z0-9]/gi, '_');
+    const profile = boardPins[0].profile || 'unknown';
+
+    const metadata = {
+      board,
+      profile,
+      exportedAt: new Date().toISOString(),
+      pinCount: boardPins.length,
+      pins: boardPins.map(pin => ({
+        id: pin.id,
+        title: pin.title,
+        description: pin.description || '',
+        altText: pin.altText || '',
+        url: pin.url,
+        imageUrl: pin.image,
+        carouselImages: pin.carouselImages || null,
+        downloadPath: pin.downloadPath || null,
+        firstSeen: pin.firstSeen,
+        downloadedAt: pin.downloadedAt,
+      })),
+    };
+
+    const json = JSON.stringify(metadata, null, 2);
+    const dataUrl = 'data:application/json;charset=utf-8,' + encodeURIComponent(json);
+    const filename = `${prefix}/${profile}/${boardSlug}/_metadata.json`;
+
+    // Download directly — data: URLs work with chrome.downloads
+    await new Promise(resolve => {
+      chrome.downloads.download({ url: dataUrl, filename, conflictAction: 'overwrite', saveAs: false }, () => resolve());
+    });
+  }
 }
 
 // ── Rendering ─────────────────────────────────────────────

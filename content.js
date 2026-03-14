@@ -606,21 +606,32 @@ function extractPinData(element, index) {
     return { id: pinId, unavailable: true };
   }
 
-  const img = element.querySelector('img');
-  const imageUrl = img ? (img.getAttribute('src') || img.getAttribute('data-src')) : null;
+  // Collect all images — carousel pins have multiple
+  const imgs = [...element.querySelectorAll('img')];
+  const primaryImg = imgs[0] || null;
+  const imageUrl = primaryImg ? (primaryImg.getAttribute('src') || primaryImg.getAttribute('data-src')) : null;
+
+  // Alt text is Pinterest's auto-generated visual description ("This image may contain...")
+  const altText = primaryImg?.getAttribute('alt')?.trim() || '';
 
   const title =
     element.querySelector('[data-test-id="pinTitle"]')?.textContent?.trim() ||
     element.querySelector('h1, h2, h3')?.textContent?.trim() ||
-    img?.getAttribute('alt')?.trim() ||
     '';
+
+  // Carousel: collect additional image URLs beyond the primary
+  const carouselImages = imgs.length > 1
+    ? imgs.map(img => upgradeImageUrl(img.getAttribute('src') || img.getAttribute('data-src'))).filter(Boolean)
+    : null;
 
   return {
     id: pinId,
-    title: title || 'Untitled Pin',
+    title: title || altText || 'Untitled Pin',
     description: title || '',
+    altText,
     image: upgradeImageUrl(imageUrl),
     thumbnail: imageUrl,
+    carouselImages,
     url: `https://www.pinterest.com/pin/${pinId}/`,
   };
 }
@@ -722,12 +733,25 @@ function extractPinsFromScripts() {
 }
 
 function formatPinFromAPI(apiPin) {
+  // Pinterest's auto-generated visual description
+  const altText = apiPin.closeup_description || apiPin.auto_alt_text || '';
+
+  // Carousel pins have carousel_data with slides
+  let carouselImages = null;
+  if (apiPin.carousel_data?.carousel_slots?.length > 1) {
+    carouselImages = apiPin.carousel_data.carousel_slots.map(slot =>
+      slot.images?.orig?.url || slot.images?.['736x']?.url
+    ).filter(Boolean);
+  }
+
   return {
     id: String(apiPin.id),
-    title: apiPin.title || apiPin.grid_title || 'Untitled Pin',
+    title: apiPin.title || apiPin.grid_title || altText || 'Untitled Pin',
     description: apiPin.description || apiPin.title || '',
+    altText,
     image: apiPin.images?.orig?.url || apiPin.images?.['736x']?.url || null,
     thumbnail: apiPin.images?.['236x']?.url || apiPin.images?.['136x136']?.url || null,
+    carouselImages,
     url: `https://www.pinterest.com/pin/${apiPin.id}/`,
   };
 }
